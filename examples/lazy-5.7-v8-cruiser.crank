@@ -1,0 +1,46 @@
+{
+  "format": "crankcase",
+  "version": 1,
+  "name": "Lazy 5.7 V8 cruiser",
+  "notes": "A big, torquey road V8 for relaxed cruising. 6th is an overdrive turning about 1,950 rpm at 100 km/h; top speed (about 300 km/h in the BX) is set by drag, not the rev limiter.",
+  "engine": {
+    "layout": "v",
+    "cylinders": 8,
+    "bore": 99,
+    "stroke": 92,
+    "build": "road",
+    "compression": 9.6,
+    "fuel": "87",
+    "duration": 212,
+    "lift": 10,
+    "runner": 58,
+    "rings": "standard",
+    "bearings": "large",
+    "oil": "10w40",
+    "sump": "wet",
+    "flywheel": "stock",
+    "crank": "full"
+  },
+  "gearing": {
+    "gears": [
+      4.46,
+      3.2,
+      2.42,
+      1.86,
+      1.33,
+      0.89
+    ],
+    "finalDrive": 2.5,
+    "tire": "225/50R15",
+    "shift": "quick"
+  },
+  "summary": {
+    "engine": "V8 5.67 L",
+    "peakPowerKw": 255,
+    "peakPowerRpm": 5400,
+    "peakTorqueNm": 578,
+    "peakTorqueRpm": 3550,
+    "redline": 6150,
+    "massKg": 267
+  }
+}

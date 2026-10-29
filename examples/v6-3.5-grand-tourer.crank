@@ -1,0 +1,46 @@
+{
+  "format": "crankcase",
+  "version": 1,
+  "name": "V6 3.5 grand tourer",
+  "notes": "A smooth V6 for a fast, comfortable grand tourer: about 2,400 rpm at 100 km/h in 6th, and top speed (about 285 km/h in the BX) near peak power in the same gear.",
+  "engine": {
+    "layout": "v",
+    "cylinders": 6,
+    "bore": 95.5,
+    "stroke": 81.4,
+    "build": "sport",
+    "compression": 10.6,
+    "fuel": "91",
+    "duration": 232,
+    "lift": 10.8,
+    "runner": 44,
+    "rings": "standard",
+    "bearings": "standard",
+    "oil": "5w30",
+    "sump": "wet",
+    "flywheel": "stock",
+    "crank": "full"
+  },
+  "gearing": {
+    "gears": [
+      3.26,
+      2.43,
+      1.86,
+      1.47,
+      1.19,
+      1
+    ],
+    "finalDrive": 2.78,
+    "tire": "225/45R16",
+    "shift": "quick"
+  },
+  "summary": {
+    "engine": "V6 3.50 L",
+    "peakPowerKw": 213,
+    "peakPowerRpm": 6700,
+    "peakTorqueNm": 382,
+    "peakTorqueRpm": 4650,
+    "redline": 7900,
+    "massKg": 198
+  }
+}

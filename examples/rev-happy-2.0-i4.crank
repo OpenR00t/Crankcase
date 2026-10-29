@@ -1,0 +1,45 @@
+{
+  "format": "crankcase",
+  "version": 1,
+  "name": "Rev-happy 2.0 I4",
+  "notes": "A high-revving track-day four. Even steps from 2nd to 5th keep every upshift above 80% of peak power, and top speed (about 259 km/h in the BX) comes just past peak power in 5th.",
+  "engine": {
+    "layout": "inline",
+    "cylinders": 4,
+    "bore": 86,
+    "stroke": 86,
+    "build": "race",
+    "compression": 11.5,
+    "fuel": "93",
+    "duration": 262,
+    "lift": 12,
+    "runner": 28,
+    "rings": "low",
+    "bearings": "standard",
+    "oil": "5w30",
+    "sump": "wet",
+    "flywheel": "stock",
+    "crank": "full"
+  },
+  "gearing": {
+    "gears": [
+      4.5,
+      3.2,
+      2.29,
+      1.63,
+      1.17
+    ],
+    "finalDrive": 3.15,
+    "tire": "205/60R15",
+    "shift": "quick"
+  },
+  "summary": {
+    "engine": "I4 2.00 L",
+    "peakPowerKw": 163,
+    "peakPowerRpm": 7650,
+    "peakTorqueNm": 217,
+    "peakTorqueRpm": 6450,
+    "redline": 8350,
+    "massKg": 142
+  }
+}

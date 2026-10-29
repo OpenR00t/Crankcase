@@ -1,0 +1,93 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later
+     Copyright (C) 2026 The Crankcase contributors -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crankcase</title>
+  <link rel="stylesheet" href="vendor/uPlot.min.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="vendor/uPlot.iife.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header class="top">
+      <div class="brand"><span class="mark">C</span>CRANKCASE</div>
+      <label class="name">Design <input id="name" type="text" maxlength="40" spellcheck="false"></label>
+      <button id="notesBtn" class="btn small">Notes</button>
+      <button id="openBtn" class="btn small">Open</button>
+      <button id="saveBtn" class="btn small">Save</button>
+      <button id="runBtn" class="btn small" title="Open a run recorded in BeamNG (MoTeC .ld, e.g. from Beamlog) to compare with the design">Open run</button>
+      <span id="runChip" class="chip" hidden><span class="txt"></span><button id="runClose" title="Close the run">×</button></span>
+      <label class="name">Target <select id="target-car"></select></label>
+      <div class="spacer"></div>
+      <span id="target" class="pill"><span class="dot"></span><span class="txt">BeamNG</span></span>
+      <button id="exportBtn" class="btn primary">Export to BeamNG</button>
+    </header>
+    <main class="body">
+      <aside class="side">
+        <nav id="steps" class="steps"></nav>
+        <div id="section" class="section"></div>
+        <div id="coming" class="coming"></div>
+      </aside>
+      <section class="content">
+        <div id="stats" class="stats"></div>
+        <div class="card">
+          <div class="title"><h2>Torque &amp; power</h2><span class="sub">at the flywheel</span>
+            <div class="tools">
+              <span id="baselineName" class="muted"></span>
+              <button id="pinBtn" class="btn small">Pin as baseline</button>
+              <button id="openBaseBtn" class="btn small">Open as baseline</button>
+              <button id="resetBtn" class="btn small">Reset design</button>
+            </div>
+          </div>
+          <div id="mainChart" class="chart"></div>
+          <div class="legend">
+            <span><i class="sw" style="background:var(--green)"></i>Torque (N·m)</span>
+            <span><i class="sw" style="background:var(--aqua)"></i>Power (kW)</span>
+            <span><i class="sw dash"></i>Baseline</span>
+            <span id="readout" class="readout"></span>
+          </div>
+          <div id="runLegend" class="legend" hidden><span><i class="sw" style="background:var(--orange)"></i>Run: full-throttle torque, logged in BeamNG</span></div>
+          <div class="band">
+            <span class="label">Band</span>
+            <input id="bandLo" type="number" min="1000" max="9000" step="100"> –
+            <input id="bandHi" type="number" min="1000" max="9000" step="100"> rpm
+            <div id="bandStats" class="bandstats"></div>
+          </div>
+        </div>
+        <div class="card" id="runCard" hidden>
+          <div class="title"><h2>Run vs design</h2><span id="runSub" class="sub"></span></div>
+          <div id="runBody" class="runbody"></div>
+        </div>
+        <div class="card" id="fitCard">
+          <div class="title"><h2>Fit</h2><span id="fitSub" class="sub"></span></div>
+          <div class="fit">
+            <div id="fitViews" class="fitviews"></div>
+            <ul id="fitChecks" class="checks"></ul>
+          </div>
+        </div>
+        <div class="card">
+          <div class="title"><h2 id="sectionChartTitle"></h2><span id="sectionChartSub" class="sub"></span></div>
+          <div id="sectionChart" class="chart"></div>
+          <div id="sectionLegend" class="legend"></div>
+          <div id="valveChart" hidden>
+            <div id="extraTitle" class="title sub2"></div>
+            <div class="chart"></div>
+            <div id="extraLegend" class="legend"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <div id="exportPanel" class="drawer" hidden></div>
+    <div id="notesPanel" class="drawer" hidden>
+      <h3>Notes</h3>
+      <textarea id="notes" rows="9" spellcheck="true" placeholder="Saved with the design in its .crank file"></textarea>
+      <div id="fileMsg" class="msg"></div>
+      <div class="row"><button id="notesClose" class="btn">Close</button></div>
+    </div>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

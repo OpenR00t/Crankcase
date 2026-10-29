@@ -1,0 +1,45 @@
+{
+  "format": "crankcase",
+  "version": 1,
+  "name": "Boxer 2.35 rally",
+  "notes": "A flat-four for rally stages, built for hard acceleration between 40 and 160 km/h. Close ratios on a short 6.00 final drive: every upshift lands at 99% of peak power or more, and it tops out on the limiter at about 176 km/h in the BX. Ultra-light flywheel and lightened crank for quick revs and fast shifts.",
+  "engine": {
+    "layout": "flat",
+    "cylinders": 4,
+    "bore": 102,
+    "stroke": 72,
+    "build": "sport",
+    "compression": 10.5,
+    "fuel": "91",
+    "duration": 238,
+    "lift": 11,
+    "runner": 40,
+    "rings": "standard",
+    "bearings": "standard",
+    "oil": "5w30",
+    "sump": "dry",
+    "flywheel": "ultra",
+    "crank": "lightened"
+  },
+  "gearing": {
+    "gears": [
+      2.7,
+      1.97,
+      1.55,
+      1.26,
+      1
+    ],
+    "finalDrive": 6,
+    "tire": "205/60R15",
+    "shift": "quick"
+  },
+  "summary": {
+    "engine": "Flat-4 2.35 L",
+    "peakPowerKw": 160,
+    "peakPowerRpm": 7300,
+    "peakTorqueNm": 262,
+    "peakTorqueRpm": 5200,
+    "redline": 8950,
+    "massKg": 158
+  }
+}
