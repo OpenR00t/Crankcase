@@ -98,7 +98,7 @@ aside.side { background: var(--bg-h); border-right: 1px solid var(--bg1); displa
 .fig .val { color: var(--fg1); font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
 .fig.warn .val { color: var(--yellow); }
 .fig.crit .val { color: var(--red); }
-.fig .val .warn { color: var(--yellow); } .fig .val .crit { color: var(--red); }
+.fig .val .warn { color: var(--yellow); } .fig .val .crit { color: var(--red); } .fig .val .info { color: var(--blue); }
 .notes { display: grid; gap: 4px; margin: 0 0 12px; padding: 0; list-style: none; }
 .note { position: relative; display: flex; align-items: baseline; gap: 8px; padding: 5px 9px;
   border-left: 3px solid var(--blue); background: rgba(131, 165, 152, .08); border-radius: 0 4px 4px 0;

@@ -144,7 +144,7 @@ function renderSection() {
     `<div class="controls">${ctl}</div>` +
     (l.id === "gearing" ? ratioTools(d) : "") +
     `<div id="figs" class="figs"></div>` +
-    `<ul id="notes" class="notes"></ul>` +
+    `<ul id="readoutNotes" class="notes"></ul>` +
     `<details id="bg" class="bg read"${state.bgOpen ? " open" : ""}><summary>How it works</summary><div id="bgBody"></div></details>`;
   $("bg").ontoggle = () => { state.bgOpen = $("bg").open; };
   if (l.id === "gearing") wireRatioTools();
@@ -203,12 +203,12 @@ function renderWhy(a) {
     `<span class="k">${f.label}</span><span class="val">${f.value}</span>` +
     (f.tip ? `<div class="more">${f.tip}</div>` : "") + "</div>").join("");
   const notes = sectionNotes(l, d, a, ctx);
-  $("notes").innerHTML = notes.map((n) =>
+  $("readoutNotes").innerHTML = notes.map((n) =>
     `<li class="note ${n.level}${n.more ? " has-more" : ""}"${n.more ? ' tabindex="0"' : ""}>` +
     `<span class="mark">${n.level === "crit" ? "!" : n.level === "warn" ? "▲" : "i"}</span>` +
     `<span class="t">${n.text}</span>` +
     (n.more ? `<div class="more">${n.more}</div>` : "") + "</li>").join("");
-  $("notes").hidden = !notes.length;
+  $("readoutNotes").hidden = !notes.length;
   const bg = l.background?.(d, a, ctx) ?? [];
   $("bgBody").innerHTML = bg.map((t) => `<p>${t}</p>`).join("");
   $("bg").hidden = !bg.length;
@@ -442,6 +442,11 @@ function rpmSawtooth(g, a) {
     })),
     hlines: [{ y: red, color: C.orange, label: "redline" }, { y: g.peakPowerRpm, color: C.aqua, label: "peak power" }],
   };
+  // best shift points: a dot where each gear is best left
+  const best = new Map(g.bestShifts.map((s) => [Math.round(s.kmh), s.rpm]));
+  out.series.push({ label: "best", name: "Best shift", unit: "rpm", color: C.fg1, points: true, size: 7,
+    values: g.speeds.map((v) => best.get(v) ?? null) });
+  out.legend += `<span><i class="sw" style="background:var(--fg1)"></i>Best shift points</span>`;
   // the run: logged rpm against road speed, per gear, as points on the same km/h grid
   if (runResult && runResult.points && runResult.points.length) {
     const byGear = new Map();

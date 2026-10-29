@@ -122,18 +122,44 @@ export function analyseGearing(d, car) {
   const I = totalInertia(d), radius = tireRadius(d.tire);
   const inertiaMass = rs.map((r) => equivalentMass(I, r * d.finalDrive, radius));
 
-  // 0-100 km/h: best gear at each speed, limited by grip, minus resistance, with shift pauses.
+  // Acceleration in a gear at a speed: push (capped by grip) minus resistance, over the mass.
   // Mass: the car, about 3% for its wheels and driveline, and the engine's inertia in that gear.
   const traction = car.grip * car.mass * GRAVITY;
+  const accelIn = (gi, kmh) => {
+    const f = wheelForce(d, kmh, rs[gi], { slipFirst: gi === 0 });
+    if (f == null) return null;
+    return (Math.min(traction, f) - resistance(car, kmh)) / (car.mass * 1.03 + inertiaMass[gi]);
+  };
+
+  // Best shift points: leave each gear where the next one accelerates the car harder.
+  // Past peak power the lower gear's push fades while the next gear's is still rising,
+  // and the lower gear also has more engine inertia to spin up, so the best point can
+  // come before redline. If the next gear never catches up, it's redline.
+  const bestShifts = rs.slice(0, -1).map((r, i) => {
+    const vRed = speedAt(d, red, r) - 0.01;
+    let at = vRed;
+    for (let kmh = Math.max(1, speedAt(d, 1000, rs[i + 1])); kmh <= vRed; kmh += 0.25) {
+      // while this gear can still spin the tyres, it's already using all the grip: stay in it
+      const f = wheelForce(d, kmh, r, { slipFirst: i === 0 });
+      if (f != null && f >= traction) continue;
+      const now = accelIn(i, kmh), next = accelIn(i + 1, kmh);
+      if (now != null && next != null && next > now) { at = kmh; break; }
+    }
+    const rpm = rpmAt(d, at, r);
+    return { from: i + 1, to: i + 2, kmh: at, rpm, landing: rpmAt(d, at, rs[i + 1]), early: rpm < red - 100 };
+  });
+
+  // 0-100 km/h: shifting at the best shift points, with shift pauses; a gear that reaches
+  // 100 km/h before redline is held to the finish rather than spending a shift on it.
   let v = 0, t = 0, gear = 0;
   const dt = 0.01;
   while (v < 100 / 3.6 && t < 60) {
     const kmh = v * 3.6;
     let g = gear;
-    while (g < rs.length - 1 && rpmAt(d, kmh, rs[g]) >= red - 1) g++;
+    while (g < rs.length - 1 && (rpmAt(d, kmh, rs[g]) >= red - 1 ||
+      (kmh >= bestShifts[g].kmh && speedAt(d, red, rs[g]) < 100))) g++;
     if (g !== gear) { t += shiftTime(d); gear = g; }
-    const f = Math.min(traction, wheelForce(d, kmh, rs[gear], { slipFirst: gear === 0 }) ?? 0);
-    const acc = (f - resistance(car, kmh)) / (car.mass * 1.03 + inertiaMass[gear]);
+    const acc = accelIn(gear, kmh) ?? -1;
     if (acc <= 0) { t = Infinity; break; }
     v += acc * dt; t += dt;
   }
@@ -141,7 +167,7 @@ export function analyseGearing(d, car) {
   return {
     speeds, force, resist, ideal, best, rs,
     top, topGear: topGear + 1, topRpm, limitedBy, atRedline,
-    shifts, coverage: want ? got / want : 0, inertiaMass,
+    shifts, bestShifts, coverage: want ? got / want : 0, inertiaMass,
     zeroTo100: t,
     rpmAt100Top: rpmAt(d, 100, rs[rs.length - 1]),
     peakPowerRpm: a.peakPowerRpm, redline: red,

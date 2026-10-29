@@ -320,8 +320,11 @@ export const SECTIONS = [
           g.shifts.map((s) => `<span class="${s.powerShare < 0.7 ? "crit" : s.powerShare < 0.8 ? "warn" : ""}">${pct(s.powerShare)}</span>`).join(" · "),
           "Share of peak power after each upshift from redline (aim for 80% or more): " +
           g.shifts.map((s) => `${s.from}→${s.to} at ${f0(s.rpm)} rpm`).join(", ")),
+        fig("Best shifts", g.bestShifts.map((s) => s.early ? `<span class="info">${f0(s.rpm)}</span>` : "redline").join(" · "),
+          "Upshift rpm for the hardest acceleration: where the next gear starts pulling harder, counting grip and the engine's inertia. " +
+          g.bestShifts.map((s) => `${s.from}→${s.to} at ${f0(s.rpm)} rpm, ${f0(s.kmh)} km/h, landing at ${f0(s.landing)}`).join("; ") + "."),
         fig("0–100 km/h", Number.isFinite(g.zeroTo100) ? `${f1(g.zeroTo100)} s` : "never",
-          `Estimate: ${shiftTime(d).toFixed(1)} s per shift (${SHIFT_STYLES[d.shift]?.label.toLowerCase() ?? "quick"}, set in Rotating mass), the car's grip, and the engine's inertia`),
+          `Estimate, shifting at the best shift points: ${shiftTime(d).toFixed(1)} s per shift (${SHIFT_STYLES[d.shift]?.label.toLowerCase() ?? "quick"}, set in Rotating mass), the car's grip, and the engine's inertia`),
         fig("100 km/h in top", `${f0(g.rpmAt100Top)} rpm`),
         fig("Ideal line covered", pct(g.coverage), "How much of the dashed constant-power line the gears reach, 20 km/h to top speed"),
       ];
@@ -336,6 +339,12 @@ export const SECTIONS = [
         out.push(make(`${s.from}→${s.to} falls out of the power band (${pct(s.powerShare)})`,
           `Shifting at redline, the revs land at ${f0(s.rpm)} rpm. Below about 80% of peak power the car bogs after the shift: ` +
           "it's the dip between those two curves in the force chart. Close the ratio gap."));
+      }
+      const early = g.bestShifts.filter((s) => s.early);
+      if (early.length) {
+        out.push(info(`Shift before redline: ${early.map((s) => `${s.from}→${s.to} at ${f0(s.rpm)}`).join(", ")}`,
+          "Past these points the next gear accelerates the car harder: the engine is beyond peak power, so the lower gear's push " +
+          "is fading while the next gear's is still strong. Revving on to redline is slower. The dots on the rpm chart mark them."));
       }
       if (g.limitedBy === "redline") {
         out.push(warn(`Top speed on the rev limiter in ${ORD[g.topGear - 1]}`,
@@ -355,6 +364,9 @@ export const SECTIONS = [
     background(d, a, ctx) {
       return [
         "<b>Shift landing</b> = shift rpm × next ratio ÷ current ratio. Aim for every upshift to land at 80% of peak power or more.",
+        "<b>Best shift point</b>: the speed where the next gear's push, less drag, over the car's mass (including the engine's inertia " +
+        "in that gear) beats this gear's. While a gear can still spin the tyres it's kept. It's redline whenever the next gear never " +
+        "catches up, which is usual on engines that hold their power to the limiter. It doesn't count the time a shift takes.",
         "<b>Top gear</b> works best with peak power at the drag-limited top speed. Taller is a cruising overdrive; shorter puts the car on the limiter.",
         "Closer ratios cover more of the ideal line but need more shifts; the gaps cost acceleration.",
         ctx.gearingNote,

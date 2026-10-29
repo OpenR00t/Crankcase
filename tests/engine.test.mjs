@@ -538,3 +538,23 @@ test("closed-throttle drag: the design's friction in BeamNG's form, plus pumping
   // better parts (less friction) brake less
   assert.ok(Rot.closedThrottleDrag(Parts.resolve({ ...d, rings: "low", oil: "0w20" }), 6000) < Rot.closedThrottleDrag(d, 6000));
 });
+
+test("best shift points: where the next gear accelerates harder, redline if it never does", () => {
+  const car = PROFILES.bx.car;
+  const d = Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS, ...Gear.DEFAULT_GEARING });
+  const g = Gear.analyseGearing(d, car);
+  assert.equal(g.bestShifts.length, g.rs.length - 1);
+  for (const s of g.bestShifts) {
+    assert.ok(s.rpm <= E.redline(d) + 1, `${s.from}: ${s.rpm}`);
+    assert.ok(Math.abs(s.landing - s.rpm * g.rs[s.to - 1] / g.rs[s.from - 1]) < 1);
+    // before the best point the current gear pulls at least as hard as the next
+    const before = s.kmh - 3;
+    const fNow = Gear.wheelForce(d, before, g.rs[s.from - 1]), fNext = Gear.wheelForce(d, before, g.rs[s.to - 1]);
+    if (s.early && fNow != null && fNext != null) assert.ok(fNow >= fNext * 0.97, `${s.from}→${s.to}`);
+  }
+  // an engine whose power falls off well before its redline shifts early; widely spaced gears shift at redline
+  const peaky = { ...d, gearCount: 4, gear1: 3.3, gear2: 2.9, gear3: 2.5, gear4: 2.2 };
+  assert.ok(Gear.analyseGearing(peaky, car).bestShifts.some((s) => s.early));
+  const wide = { ...d, gearCount: 4, gear1: 4.5, gear2: 2.2, gear3: 1.2, gear4: 0.7 };
+  assert.ok(Gear.analyseGearing(wide, car).bestShifts.slice(1).every((s) => !s.early));
+});
