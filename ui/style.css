@@ -273,3 +273,12 @@ header.top .btn.small { white-space: nowrap; }
 .locks .lmsg.ok { color: var(--aqua); }
 .stat .pad { width: 10px; height: 11px; color: var(--aqua); margin-left: 5px; vertical-align: -1px; }
 .ctl input[type=range].held::-webkit-slider-thumb { background: var(--yellow); }
+
+/* ---------- update offer ---------- */
+.update-toast { position: fixed; right: 18px; bottom: 18px; z-index: 50; width: 360px; max-width: calc(100vw - 36px);
+  background: var(--bg0-s); border: 1px solid var(--green-d); border-radius: var(--radius); padding: 12px 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .45); font-size: 13px; }
+.update-toast .muted { color: var(--gray); }
+.update-toast .notes { margin-top: 6px; white-space: pre-line; font-size: 12px; color: var(--fg4); max-height: 120px; overflow: auto; }
+.update-toast .row { display: flex; gap: 8px; margin-top: 10px; }
+.update-toast .status { margin-top: 8px; font-size: 12px; color: var(--fg4); }

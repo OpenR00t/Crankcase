@@ -21,6 +21,7 @@ import { steadyBoost, fullBoostRpm, naturallyAspirated, superchargerBoost, turbo
 import { SHIFT_STYLES, shiftTime } from "./lib/gearing.js";
 import { backPressure, headerTunedRpm, freeFlowing } from "./lib/exhaust.js";
 import { LOCKS, applyChange, setLock, clearLock, lockList } from "./lib/locks.js";
+import { checkForUpdate } from "./lib/update.js";
 
 const $ = (id) => document.getElementById(id);
 const fmt0 = (v) => Math.round(v).toLocaleString("en-US");
@@ -1075,3 +1076,4 @@ renderSection();
 renderTarget();
 redraw();
 loadCars();
+checkForUpdate();

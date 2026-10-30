@@ -5,7 +5,8 @@
 // in ../ui; this side only finds BeamNG.drive on disk, reads the vehicle files
 // (game and mods) that car detection and exports build on, writes exported
 // parts into the user folder, and reads and writes .crank design files picked
-// in the file dialogs.
+// in the file dialogs. Release builds also update themselves from the
+// project's GitHub releases.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -13,6 +14,8 @@ use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tauri::AppHandle;
+use tauri_plugin_updater::UpdaterExt;
 
 mod vehicles;
 use vehicles::Index;
@@ -100,7 +103,9 @@ fn beamng_game_folder() -> Option<String> {
 /// A .jbeam part or .pc config under vehicles/, checked before use.
 fn valid_vehicle_entry(entry: &str) -> Result<(), String> {
     // engine parts to borrow from, and stock vehicle configs to start a config from
-    let ok = entry.starts_with("vehicles/") && (entry.ends_with(".jbeam") || entry.ends_with(".pc")) && !entry.contains("..");
+    let ok = entry.starts_with("vehicles/")
+        && (entry.ends_with(".jbeam") || entry.ends_with(".pc"))
+        && !entry.contains("..");
     if ok {
         Ok(())
     } else {
@@ -135,14 +140,21 @@ fn list_vehicles() -> Vec<VehicleEntry> {
     ix.vehicles()
         .into_iter()
         .map(|id| {
-            let info = ix.read(&format!("vehicles/{id}/info.json")).unwrap_or_default();
+            let info = ix
+                .read(&format!("vehicles/{id}/info.json"))
+                .unwrap_or_default();
             VehicleEntry { id, info }
         })
         .collect()
 }
 
 fn valid_vehicle_dir(id: &str) -> Result<(), String> {
-    if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') && !id.contains("..") {
+    if !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        && !id.contains("..")
+    {
         Ok(())
     } else {
         Err(format!("not a vehicle folder: {id}"))
@@ -159,7 +171,9 @@ fn vehicle_bundle(id: String) -> Result<std::collections::BTreeMap<String, Strin
 /// The game's English vehicle names, for vehicles that name themselves with translation keys.
 #[tauri::command]
 fn vehicle_names() -> std::collections::BTreeMap<String, String> {
-    find_game_folder().map(|g| vehicles::vehicle_names(&g)).unwrap_or_default()
+    find_game_folder()
+        .map(|g| vehicles::vehicle_names(&g))
+        .unwrap_or_default()
 }
 
 /// One .jbeam or .pc file from wherever the game would load it (mods over the game).
@@ -177,7 +191,10 @@ fn safe_relative(rel: &str) -> Result<PathBuf, String> {
         return Err(format!("refusing to write outside {EXPORT_ROOT}"));
     }
     let path = Path::new(rel);
-    if path.components().any(|c| !matches!(c, Component::Normal(_))) {
+    if path
+        .components()
+        .any(|c| !matches!(c, Component::Normal(_)))
+    {
         return Err("refusing a path with '..' or a root".into());
     }
     Ok(path.to_path_buf())
@@ -185,7 +202,8 @@ fn safe_relative(rel: &str) -> Result<PathBuf, String> {
 
 #[tauri::command]
 fn export_jbeam(relative_path: String, contents: String) -> Result<String, String> {
-    let root = find_user_folder().ok_or("BeamNG's user folder wasn't found. Set CRANKCASE_BEAMNG_USER to it.")?;
+    let root = find_user_folder()
+        .ok_or("BeamNG's user folder wasn't found. Set CRANKCASE_BEAMNG_USER to it.")?;
     let target = root.join(safe_relative(&relative_path)?);
     if let Some(dir) = target.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
@@ -208,7 +226,9 @@ fn crank_path(path: &str) -> Result<PathBuf, String> {
 #[tauri::command]
 fn read_crank(path: String) -> Result<String, String> {
     let p = crank_path(&path)?;
-    let size = fs::metadata(&p).map_err(|e| format!("{}: {e}", p.display()))?.len();
+    let size = fs::metadata(&p)
+        .map_err(|e| format!("{}: {e}", p.display()))?
+        .len();
     if size > CRANK_MAX_BYTES {
         return Err("that file is too large to be a .crank design".into());
     }
@@ -236,7 +256,9 @@ fn run_path(path: &str) -> Result<PathBuf, String> {
 #[tauri::command]
 fn read_run(path: String) -> Result<tauri::ipc::Response, String> {
     let p = run_path(&path)?;
-    let size = fs::metadata(&p).map_err(|e| format!("{}: {e}", p.display()))?.len();
+    let size = fs::metadata(&p)
+        .map_err(|e| format!("{}: {e}", p.display()))?
+        .len();
     if size > RUN_MAX_BYTES {
         return Err("that log is too large to open here".into());
     }
@@ -251,9 +273,71 @@ fn read_run_laps(path: String) -> Result<String, String> {
     Ok(fs::read_to_string(p).unwrap_or_default())
 }
 
+/// What the page shows when an update is available.
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    version: String,
+    current: String,
+    notes: Option<String>,
+}
+
+/// Whether this build was made with an updater configuration (release builds).
+fn updater_configured(app: &AppHandle) -> bool {
+    app.config().plugins.0.contains_key("updater")
+}
+
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    if !updater_configured(&app) {
+        return Ok(None);
+    }
+    let update = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(update.map(|u| UpdateInfo {
+        version: u.version.clone(),
+        current: u.current_version.clone(),
+        notes: u.body.clone(),
+    }))
+}
+
+/// Download the update (checked against the signing key), install it and restart.
+/// On Windows the installer closes the app itself.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    if !updater_configured(&app) {
+        return Err("This build doesn't update itself.".into());
+    }
+    let update = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("No update is available any more.")?;
+    let bytes = update
+        .download(|_, _| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+    update.install(bytes).map_err(|e| e.to_string())?;
+    app.restart();
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // the updater needs its settings (signing key, where to look),
+            // which only release builds carry
+            if updater_configured(app.handle()) {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             beamng_user_folder,
             beamng_game_folder,
@@ -265,7 +349,9 @@ fn main() {
             read_crank,
             write_crank,
             read_run,
-            read_run_laps
+            read_run_laps,
+            check_update,
+            install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running Crankcase");

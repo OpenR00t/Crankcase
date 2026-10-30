@@ -29,7 +29,8 @@ pub struct Index {
 
 fn wanted(path: &str) -> bool {
     let p = path.to_ascii_lowercase();
-    p.starts_with("vehicles/") && (p.ends_with(".jbeam") || p.ends_with(".pc") || p.ends_with(".json"))
+    p.starts_with("vehicles/")
+        && (p.ends_with(".jbeam") || p.ends_with(".pc") || p.ends_with(".json"))
 }
 
 fn zips_in(dir: &Path) -> Vec<PathBuf> {
@@ -37,7 +38,11 @@ fn zips_in(dir: &Path) -> Vec<PathBuf> {
         .map(|it| {
             it.flatten()
                 .map(|e| e.path())
-                .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("zip")))
+                .filter(|p| {
+                    p.extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -48,8 +53,12 @@ fn zips_in(dir: &Path) -> Vec<PathBuf> {
 /// Mods switched off in the game's mod manager (mods/db.json), as /mods/... paths in lower case.
 fn inactive_mods(user: &Path) -> HashSet<String> {
     let mut off = HashSet::new();
-    let Ok(text) = fs::read_to_string(user.join("mods").join("db.json")) else { return off };
-    let Ok(db) = serde_json::from_str::<serde_json::Value>(&text) else { return off };
+    let Ok(text) = fs::read_to_string(user.join("mods").join("db.json")) else {
+        return off;
+    };
+    let Ok(db) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return off;
+    };
     if let Some(mods) = db.get("mods").and_then(|m| m.as_object()) {
         for m in mods.values() {
             if m.get("active").and_then(|a| a.as_bool()) == Some(false) {
@@ -75,17 +84,29 @@ impl Index {
             let mods = user.join("mods");
             for (dir, prefix) in [(mods.clone(), "/mods/"), (mods.join("repo"), "/mods/repo/")] {
                 for z in zips_in(&dir) {
-                    let name = z.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_ascii_lowercase();
+                    let name = z
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
                     if !off.contains(&format!("{prefix}{name}")) {
                         ix.add_zip(&z);
                     }
                 }
             }
             if let Ok(it) = fs::read_dir(mods.join("unpacked")) {
-                let mut dirs: Vec<PathBuf> = it.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+                let mut dirs: Vec<PathBuf> = it
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir())
+                    .collect();
                 dirs.sort();
                 for d in dirs {
-                    let name = d.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_ascii_lowercase();
+                    let name = d
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
                     if name == OWN_MOD || off.contains(&format!("/mods/unpacked/{name}")) {
                         continue;
                     }
@@ -99,12 +120,19 @@ impl Index {
     }
 
     fn add_zip(&mut self, zip: &Path) {
-        let Ok(file) = fs::File::open(zip) else { return };
-        let Ok(archive) = zip::ZipArchive::new(file) else { return };
+        let Ok(file) = fs::File::open(zip) else {
+            return;
+        };
+        let Ok(archive) = zip::ZipArchive::new(file) else {
+            return;
+        };
         for name in archive.file_names() {
             let norm = name.replace('\\', "/");
             if wanted(&norm) {
-                self.entries.insert(norm.to_ascii_lowercase(), (norm, Loc::Zip(zip.to_path_buf(), name.to_string())));
+                self.entries.insert(
+                    norm.to_ascii_lowercase(),
+                    (norm, Loc::Zip(zip.to_path_buf(), name.to_string())),
+                );
             }
         }
     }
@@ -121,7 +149,8 @@ impl Index {
                 } else if let Ok(rel) = p.strip_prefix(root) {
                     let norm = rel.to_string_lossy().replace('\\', "/");
                     if wanted(&norm) {
-                        self.entries.insert(norm.to_ascii_lowercase(), (norm, Loc::File(p.clone())));
+                        self.entries
+                            .insert(norm.to_ascii_lowercase(), (norm, Loc::File(p.clone())));
                     }
                 }
             }
@@ -135,8 +164,10 @@ impl Index {
             .values()
             .filter_map(|(path, _)| {
                 let parts: Vec<&str> = path.split('/').collect();
-                (parts.len() == 3 && parts[2].eq_ignore_ascii_case("info.json") && !parts[1].eq_ignore_ascii_case("common"))
-                    .then(|| parts[1].to_string())
+                (parts.len() == 3
+                    && parts[2].eq_ignore_ascii_case("info.json")
+                    && !parts[1].eq_ignore_ascii_case("common"))
+                .then(|| parts[1].to_string())
             })
             .collect();
         ids.sort();
@@ -145,7 +176,10 @@ impl Index {
     }
 
     pub fn read(&self, path: &str) -> Result<String, String> {
-        let (_, loc) = self.entries.get(&path.replace('\\', "/").to_ascii_lowercase()).ok_or(format!("{path} isn't in the game or any mod"))?;
+        let (_, loc) = self
+            .entries
+            .get(&path.replace('\\', "/").to_ascii_lowercase())
+            .ok_or(format!("{path} isn't in the game or any mod"))?;
         read_loc(loc)
     }
 
@@ -159,7 +193,10 @@ impl Index {
                 continue;
             }
             match loc {
-                Loc::Zip(z, name) => by_zip.entry(z.clone()).or_default().push((path.clone(), name.clone())),
+                Loc::Zip(z, name) => by_zip
+                    .entry(z.clone())
+                    .or_default()
+                    .push((path.clone(), name.clone())),
                 Loc::File(_) => {
                     if let Ok(t) = read_loc(loc) {
                         out.insert(path.clone(), t);
@@ -168,8 +205,12 @@ impl Index {
             }
         }
         for (z, items) in by_zip {
-            let Ok(file) = fs::File::open(&z) else { continue };
-            let Ok(mut archive) = zip::ZipArchive::new(file) else { continue };
+            let Ok(file) = fs::File::open(&z) else {
+                continue;
+            };
+            let Ok(mut archive) = zip::ZipArchive::new(file) else {
+                continue;
+            };
             for (path, name) in items {
                 if let Ok(mut item) = archive.by_name(&name) {
                     let mut bytes = Vec::new();
@@ -188,10 +229,14 @@ fn read_loc(loc: &Loc) -> Result<String, String> {
         Loc::File(p) => fs::read(p).map_err(|e| format!("reading {}: {e}", p.display()))?,
         Loc::Zip(z, name) => {
             let file = fs::File::open(z).map_err(|e| format!("opening {}: {e}", z.display()))?;
-            let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("reading {}: {e}", z.display()))?;
-            let mut item = archive.by_name(name).map_err(|e| format!("{name} in {}: {e}", z.display()))?;
+            let mut archive =
+                zip::ZipArchive::new(file).map_err(|e| format!("reading {}: {e}", z.display()))?;
+            let mut item = archive
+                .by_name(name)
+                .map_err(|e| format!("{name} in {}: {e}", z.display()))?;
             let mut bytes = Vec::new();
-            item.read_to_end(&mut bytes).map_err(|e| format!("reading {name}: {e}"))?;
+            item.read_to_end(&mut bytes)
+                .map_err(|e| format!("reading {name}: {e}"))?;
             bytes
         }
     };
@@ -202,12 +247,20 @@ fn read_loc(loc: &Loc) -> Result<String, String> {
 pub fn vehicle_names(game: &Path) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     let dir = game.join("locales").join("translations").join("en-US");
-    let Ok(it) = fs::read_dir(dir) else { return out };
+    let Ok(it) = fs::read_dir(dir) else {
+        return out;
+    };
     for e in it.flatten() {
-        let Ok(text) = fs::read_to_string(e.path()) else { continue };
-        let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+        let Ok(text) = fs::read_to_string(e.path()) else {
+            continue;
+        };
+        let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(&text)
+        else {
+            continue;
+        };
         for (k, v) in map {
-            if k.starts_with("vehiclesData.") && k.ends_with(".Name") && k.matches('.').count() == 2 {
+            if k.starts_with("vehiclesData.") && k.ends_with(".Name") && k.matches('.').count() == 2
+            {
                 if let Some(s) = v.as_str() {
                     out.insert(k, s.to_string());
                 }
@@ -225,7 +278,8 @@ mod tests {
     fn zip_with(path: &Path, files: &[(&str, &str)]) {
         let mut w = zip::ZipWriter::new(fs::File::create(path).unwrap());
         for (name, text) in files {
-            w.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            w.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
             w.write_all(text.as_bytes()).unwrap();
         }
         w.finish().unwrap();
@@ -240,25 +294,58 @@ mod tests {
         fs::create_dir_all(game.join("content/vehicles")).unwrap();
         fs::create_dir_all(user.join("mods/unpacked/crankcase/vehicles/bx")).unwrap();
         fs::create_dir_all(user.join("mods/unpacked/tuner/vehicles/bx")).unwrap();
-        zip_with(&game.join("content/vehicles/bx.zip"), &[
-            ("vehicles/bx/info.json", "{}"),
-            ("vehicles/bx/bx_engine.jbeam", "game"),
-            ("vehicles/bx/bx.dae", "mesh"),
-        ]);
-        zip_with(&game.join("content/vehicles/common.zip"), &[("vehicles/common/info.json", "{}"), ("vehicles/common/a.jbeam", "c")]);
-        zip_with(&user.join("mods/kit.zip"), &[("vehicles/newcar/info.json", "{}"), ("vehicles/newcar/newcar.jbeam", "n")]);
+        zip_with(
+            &game.join("content/vehicles/bx.zip"),
+            &[
+                ("vehicles/bx/info.json", "{}"),
+                ("vehicles/bx/bx_engine.jbeam", "game"),
+                ("vehicles/bx/bx.dae", "mesh"),
+            ],
+        );
+        zip_with(
+            &game.join("content/vehicles/common.zip"),
+            &[
+                ("vehicles/common/info.json", "{}"),
+                ("vehicles/common/a.jbeam", "c"),
+            ],
+        );
+        zip_with(
+            &user.join("mods/kit.zip"),
+            &[
+                ("vehicles/newcar/info.json", "{}"),
+                ("vehicles/newcar/newcar.jbeam", "n"),
+            ],
+        );
         fs::create_dir_all(user.join("mods")).unwrap();
-        zip_with(&user.join("mods/off.zip"), &[("vehicles/offcar/info.json", "{}")]);
-        fs::write(user.join("mods/db.json"), r#"{"mods":{"off":{"active":false,"fullpath":"/mods/off.zip"}}}"#).unwrap();
-        fs::write(user.join("mods/unpacked/tuner/vehicles/bx/bx_engine.jbeam"), "tuned").unwrap();
-        fs::write(user.join("mods/unpacked/crankcase/vehicles/bx/crankcase_x.jbeam"), "ours").unwrap();
+        zip_with(
+            &user.join("mods/off.zip"),
+            &[("vehicles/offcar/info.json", "{}")],
+        );
+        fs::write(
+            user.join("mods/db.json"),
+            r#"{"mods":{"off":{"active":false,"fullpath":"/mods/off.zip"}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            user.join("mods/unpacked/tuner/vehicles/bx/bx_engine.jbeam"),
+            "tuned",
+        )
+        .unwrap();
+        fs::write(
+            user.join("mods/unpacked/crankcase/vehicles/bx/crankcase_x.jbeam"),
+            "ours",
+        )
+        .unwrap();
 
         let ix = Index::build(Some(&game), Some(&user));
         assert_eq!(ix.vehicles(), vec!["bx".to_string(), "newcar".to_string()]);
         assert_eq!(ix.read("vehicles/bx/bx_engine.jbeam").unwrap(), "tuned");
         assert_eq!(ix.read("vehicles/common/a.jbeam").unwrap(), "c");
         let b = ix.bundle("bx");
-        assert_eq!(b.keys().cloned().collect::<Vec<_>>(), vec!["vehicles/bx/bx_engine.jbeam", "vehicles/bx/info.json"]);
+        assert_eq!(
+            b.keys().cloned().collect::<Vec<_>>(),
+            vec!["vehicles/bx/bx_engine.jbeam", "vehicles/bx/info.json"]
+        );
         assert!(ix.read("vehicles/bx/crankcase_x.jbeam").is_err());
         assert!(ix.read("vehicles/bx/bx.dae").is_err());
         fs::remove_dir_all(&root).unwrap();

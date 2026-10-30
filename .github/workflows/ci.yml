@@ -1,0 +1,47 @@
+# Tests on every push and pull request: the engine model and export (Node),
+# that every interface script parses, and the desktop window (Rust).
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  model:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Engine model, export and car detection tests
+        run: node --test tests/engine.test.mjs
+      - name: Scripts parse
+        run: for f in ui/*.js ui/lib/*.js; do node --check "$f"; done
+      - name: Versions agree
+        run: python3 scripts/set_version.py --check
+
+  shell:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --check
+      - name: Lint
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test

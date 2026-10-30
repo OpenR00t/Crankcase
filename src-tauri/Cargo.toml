@@ -1,6 +1,6 @@
 [package]
 name = "crankcase"
-version = "0.1.0"
+version = "0.2.0"
 description = "Engine generator for BeamNG.drive: design an engine from its parts and export it as a complete engine"
 license = "AGPL-3.0-or-later"
 edition = "2021"
@@ -15,6 +15,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 
 [features]
 default = ["custom-protocol"]

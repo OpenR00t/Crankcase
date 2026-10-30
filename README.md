@@ -214,6 +214,21 @@ restart once after the first export, then spawn the **Crankcase: *your design***
 from the vehicle selector, or pick **Engine → Crankcase: *your design*** in Vehicle Config on
 any config of the car.
 
+## Installing
+
+Download the latest release from this repository's **Releases** page:
+
+- **Windows:** `Crankcase_<version>_x64-setup.exe`. It installs for your user only (no admin
+  rights). Windows SmartScreen may warn about an unknown publisher the first time, because
+  the installer isn't code-signed: choose *More info*, then *Run anyway*.
+- **Linux:** `Crankcase_<version>_amd64.AppImage` (make it executable and run it) or the
+  `.deb` package.
+
+When a new release is out, Crankcase offers it when it starts (*Install and restart* or
+*Later*). Updates are checked against the project's signing key before they're installed.
+The AppImage updates itself; the `.deb` is updated by installing the new package. Your
+design and settings are kept.
+
 ## Running from source
 
 You need [Rust](https://rustup.rs/) (and, on Windows, the WebView2 runtime that ships with
@@ -233,8 +248,42 @@ Tests:
 
 ```
 npm test                         # engine model and export (Node.js 20+)
-cd src-tauri && cargo test       # file path checks
+cd src-tauri && cargo test       # file path checks and the vehicle index
 ```
+
+## Releases
+
+Releases are built by GitHub Actions (`.github/workflows/release.yml`) when a version tag is
+pushed: the tests run, then the Windows installer and the Linux AppImage and `.deb` are
+built, signed for the updater, and put on a **draft** release with the `latest.json` file the
+app reads. Nothing reaches users until the draft is published.
+
+To release a new version:
+
+```
+python scripts/set_version.py 0.2.0      # writes it in tauri.conf.json, Cargo.toml and package.json
+git commit -am "Release 0.2.0"
+git tag v0.2.0
+git push origin main v0.2.0
+```
+
+When the workflow finishes, open the draft release, write the notes (installed copies show
+them in the update prompt), and publish it.
+
+One-time setup, before the first release:
+
+1. Make the updater signing key (keep the private key and its password safe and out of the
+   repository; without them no further updates can be signed):
+   `npx @tauri-apps/cli signer generate -w ~/.tauri/crankcase.key`
+2. In the repository's *Settings → Secrets and variables → Actions*, add the secrets
+   `TAURI_SIGNING_PRIVATE_KEY` (contents of `crankcase.key`) and
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and the variable `TAURI_UPDATER_PUBKEY` (contents of
+   `crankcase.key.pub`).
+
+The update address and the public key are filled in by the workflow from the repository it
+runs in (`scripts/release_config.py`), so forks release under their own key.
+`.github/workflows/ci.yml` runs the model tests, checks the interface scripts parse, and
+formats, lints and tests the desktop window, on every push.
 
 ## License
 

@@ -3,3 +3,4 @@
 node_modules/
 package-lock.json
 /_to_delete/
+src-tauri/tauri.release.conf.json
