@@ -68,3 +68,25 @@ export function carDetector(platform) {
     },
   };
 }
+
+/**
+ * The configs an export can build on, for one car: [{ path, source, label, name, stock, own }],
+ * the game's stock configs first (the profile's default marked), then mods', then earlier
+ * Crankcase exports. `names` translates the game's config names.
+ */
+export async function listConfigs(platform, profile, names = {}) {
+  const rows = await platform.vehicleConfigs(profile.vehicle).catch(() => []);
+  const out = rows.map((r) => {
+    const info = readJson(r.info);
+    let name = info.Configuration;
+    if (typeof name === "string" && /^vehiclesData\./.test(name)) name = names[name] ?? null;
+    if (!name) name = r.path.split("/").pop().replace(/\.pc$/, "").replace(/_/g, " ");
+    const stock = r.source === "game";
+    const own = r.source.toLowerCase() === "crankcase";
+    return { path: r.path, source: r.source, pc: r.pc, name, stock, own,
+      label: stock ? name : own ? name : `${name} (${r.source})`,
+      isDefault: r.path === profile.config?.base };
+  });
+  const rank = (c) => (c.isDefault ? 0 : c.stock ? 1 : c.own ? 3 : 2);
+  return out.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+}

@@ -941,3 +941,29 @@ test("exhaust export: when the turbo replaces the intake that holds the exhaust 
   }
   assert.equal(JSON.parse(VC3.buildConfig(d, testProfile, BASE_PC, out).pc).parts.bx_exhaust_i4, undefined);
 });
+
+test("vehicle config: built on any base, Crankcase changes only its own slots", () => {
+  const d = { ...Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS, ...Gear.DEFAULT_GEARING }), name: "Base test" };
+  // a config another tool wrote: its suspension parts and variables, plus paint
+  const other = JSON.stringify({ format: 2, model: "bx", paints: [{ baseColor: [1, 0, 0, 1] }], licenseName: "TOOL",
+    parts: { ...JSON.parse(BASE_PC).parts, bx_suspension_F: "bx_suspension_F_tool", bx_coilover_F: "bx_coilover_F_tool" },
+    vars: { ...(JSON.parse(BASE_PC).vars ?? {}), $springF: 55000 } });
+  const cfg = VC3.buildConfig(d, PROFILES.bx, other, null, "Suspension: tool");
+  const pc = JSON.parse(cfg.pc);
+  assert.equal(pc.parts.bx_suspension_F, "bx_suspension_F_tool");
+  assert.equal(pc.parts.bx_coilover_F, "bx_coilover_F_tool");
+  assert.equal(pc.vars.$springF, 55000);
+  assert.equal(pc.licenseName, "TOOL");
+  assert.deepEqual(pc.paints, [{ baseColor: [1, 0, 0, 1] }]);
+  assert.equal(pc.parts.bx_engine, X.partName(d, PROFILES.bx));
+  assert.match(JSON.parse(cfg.info).Description, /Built on Suspension: tool/);
+  // building on an earlier export of a turbo design: an NA design drops the old turbo and its boost
+  const turbo = { ...d, name: "Old turbo", induction: "turbo", boost: 12, spoolRpm: 3800 };
+  const earlier = VC3.buildConfig(turbo, PROFILES.bx, other).pc;
+  assert.ok(JSON.parse(earlier).parts.bx_intake_i4_large.includes("_crankcase_"));
+  const again = JSON.parse(VC3.buildConfig(d, PROFILES.bx, earlier).pc);
+  assert.equal(again.parts.bx_intake_i4_large, undefined);
+  assert.equal(again.vars.$wastegateStart, undefined);
+  assert.ok(!Object.values(again.parts).some((v) => typeof v === "string" && v.includes("old_turbo")));
+  assert.equal(again.parts.bx_suspension_F, "bx_suspension_F_tool");
+});

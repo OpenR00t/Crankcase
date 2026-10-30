@@ -2,10 +2,13 @@
 // Copyright (C) 2026 The Crankcase contributors
 //
 // A vehicle config (.pc) for the target car with the design's engine and gearing:
-// a stock config (read from the game at export time) with the engine, an
+// a base config (the car's stock one, or any other, including one another tool
+// or an earlier export wrote) with the engine, flywheel, intake, exhaust, an
 // adjustable gearbox and an adjustable final drive swapped in, and the gear and
-// final-drive sliders set to the design's ratios. Everything else (body, wheels,
-// suspension, intake and exhaust) stays as the stock config has it.
+// final-drive sliders set to the design's ratios. Crankcase touches only those
+// slots and variables; everything else in the base (body, wheels, suspension,
+// paint) is carried over as it is, so tools that each own their slots can build
+// one config between them, in either order.
 
 import { parseJBeam } from "./jbeamparse.js";
 import { partName, flywheelPartName, inductionPartName, exhaustPartName } from "./export.js";
@@ -32,10 +35,10 @@ export function gearboxFor(d, cfg) {
 }
 
 /**
- * buildConfig(design, profile, basePcText, built?) → { pc, info, gearbox, notes }.
+ * buildConfig(design, profile, basePcText, built?, baseName?) → { pc, info, gearbox, notes }.
  * pc and info are the file texts; notes are warnings to show with the export.
  */
-export function buildConfig(d, profile, baseText, built = null) {
+export function buildConfig(d, profile, baseText, built = null, baseName = null) {
   const cfg = profile.config;
   const base = parseJBeam(baseText);
   const parts = { ...(base.parts || {}) };
@@ -57,7 +60,18 @@ export function buildConfig(d, profile, baseText, built = null) {
   if (d.induction && d.induction !== "none" && fam.intake) {
     parts[fam.intake.slot] = inductionPartName(d, profile);
     if (hasTurbo(d)) vars.$wastegateStart = turboSpec(d).wastegateStart;
+  } else if (fam.intake) {
+    // naturally aspirated: the engine's own default intake, even if the base had a turbo fitted
+    delete parts[fam.intake.slot];
   }
+  // a base that came from an earlier Crankcase export may still name that design's parts in
+  // slots this design doesn't use (its turbo, its exhaust): back to the car's own defaults
+  const set = new Set([cfg.engineSlot, profile.flywheelSlot, exhaust && fam.exhaust?.slot,
+    d.induction && d.induction !== "none" && fam.intake?.slot].filter(Boolean));
+  for (const [slot, v] of Object.entries(parts)) {
+    if (typeof v === "string" && v.includes("_crankcase_") && !set.has(slot)) delete parts[slot];
+  }
+  if (!(d.induction && d.induction !== "none" && hasTurbo(d))) delete vars.$wastegateStart;
   for (let i = 0; i < (box?.gears ?? 0); i++) {
     // a 4-speed design in a 5-speed box: the extra top gear repeats the last one
     vars[`$gear_${i + 1}`] = r3(rs[Math.min(i, rs.length - 1)]);
@@ -82,13 +96,14 @@ export function buildConfig(d, profile, baseText, built = null) {
       (pct ? ` Every speed in every gear will be about ${Math.abs(pct)}% ${pct > 0 ? "higher" : "lower"} than the tool shows.` : ""));
   }
 
-  const pc = { format: base.format || 2, mainPartName: base.mainPartName, model: base.model, parts, vars };
-  if (base.paints) pc.paints = base.paints;
+  // everything else in the base (paint, licence plate, anything another tool keeps there) stays
+  const pc = { ...base, format: base.format || 2, parts, vars };
 
   const a = analyse(d, 50);
   const info = {
     Configuration: `Crankcase: ${d.name}`,
-    Description: box ? `${d.name}, designed in Crankcase, with ${box.label.toLowerCase()} gearing to match.` : `${d.name}, designed in Crankcase.`,
+    Description: (box ? `${d.name}, designed in Crankcase, with ${box.label.toLowerCase()} gearing to match.` : `${d.name}, designed in Crankcase.`) +
+      (baseName ? ` Built on ${baseName}.` : ""),
     "Config Type": "Custom",
     Drivetrain: cfg.drivetrain,
     Transmission: box?.transmission ?? "Manual",

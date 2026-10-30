@@ -25,6 +25,20 @@ enum Loc {
 pub struct Index {
     /// lower-case path -> (path as written, where it is)
     entries: HashMap<String, (String, Loc)>,
+    game: Option<PathBuf>,
+    user: Option<PathBuf>,
+}
+
+/// A vehicle config the export can build on: where it comes from and its files' text.
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct ConfigEntry {
+    /// vehicles/<car>/<name>.pc
+    pub path: String,
+    /// "game", or the mod it comes from (a zip's or an unpacked folder's name)
+    pub source: String,
+    pub pc: String,
+    /// its info_<name>.json, if it has one
+    pub info: String,
 }
 
 fn wanted(path: &str) -> bool {
@@ -73,7 +87,11 @@ fn inactive_mods(user: &Path) -> HashSet<String> {
 
 impl Index {
     pub fn build(game: Option<&Path>, user: Option<&Path>) -> Index {
-        let mut ix = Index::default();
+        let mut ix = Index {
+            game: game.map(Path::to_path_buf),
+            user: user.map(Path::to_path_buf),
+            ..Index::default()
+        };
         if let Some(game) = game {
             for z in zips_in(&game.join("content").join("vehicles")) {
                 ix.add_zip(&z);
@@ -183,6 +201,109 @@ impl Index {
         read_loc(loc)
     }
 
+    /// Where a file comes from, for display: "game" or the mod's name.
+    fn source_of(&self, loc: &Loc) -> String {
+        let path = match loc {
+            Loc::Zip(z, _) => z,
+            Loc::File(p) => p,
+        };
+        if self.game.as_ref().is_some_and(|g| path.starts_with(g)) {
+            return "game".into();
+        }
+        if let Some(user) = &self.user {
+            if let Ok(rel) = path.strip_prefix(user.join("mods").join("unpacked")) {
+                if let Some(first) = rel.components().next() {
+                    return first.as_os_str().to_string_lossy().into_owned();
+                }
+            }
+            if path.starts_with(user.join("vehicles")) {
+                return "user folder".into();
+            }
+        }
+        match loc {
+            Loc::Zip(z, _) => z
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "mod".into()),
+            Loc::File(_) => "mod".into(),
+        }
+    }
+
+    /// Every config of one car an export could build on: the game's, its mods' (as indexed),
+    /// and whatever is in the unpacked mods right now, Crankcase's own exports included
+    /// (read fresh, so a config another tool just wrote shows up without a rescan).
+    pub fn configs(&self, id: &str) -> Vec<ConfigEntry> {
+        let prefix = format!("vehicles/{}/", id.to_ascii_lowercase());
+        let mut out: BTreeMap<String, ConfigEntry> = BTreeMap::new();
+        for (key, (path, loc)) in &self.entries {
+            if !key.starts_with(&prefix)
+                || !key.ends_with(".pc")
+                || key[prefix.len()..].contains('/')
+            {
+                continue;
+            }
+            let Ok(pc) = read_loc(loc) else { continue };
+            let info_key = format!(
+                "{prefix}info_{}",
+                key[prefix.len()..].trim_end_matches(".pc")
+            ) + ".json";
+            let info = self
+                .entries
+                .get(&info_key)
+                .and_then(|(_, l)| read_loc(l).ok())
+                .unwrap_or_default();
+            out.insert(
+                key.clone(),
+                ConfigEntry {
+                    path: path.clone(),
+                    source: self.source_of(loc),
+                    pc,
+                    info,
+                },
+            );
+        }
+        if let Some(user) = &self.user {
+            let unpacked = user.join("mods").join("unpacked");
+            let off = inactive_mods(user);
+            if let Ok(it) = fs::read_dir(&unpacked) {
+                for e in it.flatten() {
+                    let modname = e.file_name().to_string_lossy().into_owned();
+                    if off.contains(&format!("/mods/unpacked/{}", modname.to_ascii_lowercase())) {
+                        continue;
+                    }
+                    let Ok(files) = fs::read_dir(e.path().join("vehicles").join(id)) else {
+                        continue;
+                    };
+                    for f in files.flatten() {
+                        let name = f.file_name().to_string_lossy().into_owned();
+                        if !name.to_ascii_lowercase().ends_with(".pc") {
+                            continue;
+                        }
+                        let Ok(pc) = fs::read_to_string(f.path()) else {
+                            continue;
+                        };
+                        let stem = &name[..name.len() - 3];
+                        let info = fs::read_to_string(
+                            f.path().with_file_name(format!("info_{stem}.json")),
+                        )
+                        .unwrap_or_default();
+                        let path = format!("vehicles/{id}/{name}");
+                        out.insert(
+                            path.to_ascii_lowercase(),
+                            ConfigEntry {
+                                path,
+                                source: modname.clone(),
+                                pc,
+                                info,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        out.into_values().collect()
+    }
+
     /// Every indexed file under vehicles/<dir>/, read in one pass per archive.
     pub fn bundle(&self, dir: &str) -> BTreeMap<String, String> {
         let prefix = format!("vehicles/{}/", dir.to_ascii_lowercase());
@@ -243,7 +364,8 @@ fn read_loc(loc: &Loc) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// The game's English names for its vehicles (vehiclesData.<id>.Name -> "BX-Series").
+/// The game's English names for its vehicles and their configs
+/// (vehiclesData.<id>.Name -> "BX-Series", vehiclesData.<id>.<config>.Configuration -> "Type L (M)").
 pub fn vehicle_names(game: &Path) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     let dir = game.join("locales").join("translations").join("en-US");
@@ -259,8 +381,10 @@ pub fn vehicle_names(game: &Path) -> BTreeMap<String, String> {
             continue;
         };
         for (k, v) in map {
-            if k.starts_with("vehiclesData.") && k.ends_with(".Name") && k.matches('.').count() == 2
-            {
+            // car names (vehiclesData.bx.Name) and config names (vehiclesData.bx.<config>.Configuration)
+            let car = k.ends_with(".Name") && k.matches('.').count() == 2;
+            let config = k.ends_with(".Configuration") && k.matches('.').count() == 3;
+            if k.starts_with("vehiclesData.") && (car || config) {
                 if let Some(s) = v.as_str() {
                     out.insert(k, s.to_string());
                 }
@@ -347,6 +471,24 @@ mod tests {
             vec!["vehicles/bx/bx_engine.jbeam", "vehicles/bx/info.json"]
         );
         assert!(ix.read("vehicles/bx/crankcase_x.jbeam").is_err());
+        // configs: the game's, and every unpacked mod's read fresh, Crankcase's own included
+        fs::write(
+            user.join("mods/unpacked/crankcase/vehicles/bx/crankcase_x.pc"),
+            "{\"parts\":{}}",
+        )
+        .unwrap();
+        fs::write(
+            user.join("mods/unpacked/crankcase/vehicles/bx/info_crankcase_x.json"),
+            "{\"Configuration\":\"Crankcase: x\"}",
+        )
+        .unwrap();
+        let cfgs = ix.configs("bx");
+        let own = cfgs
+            .iter()
+            .find(|c| c.path == "vehicles/bx/crankcase_x.pc")
+            .expect("own config listed");
+        assert_eq!(own.source, "crankcase");
+        assert!(own.info.contains("Crankcase: x"));
         assert!(ix.read("vehicles/bx/bx.dae").is_err());
         fs::remove_dir_all(&root).unwrap();
     }

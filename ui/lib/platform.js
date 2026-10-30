@@ -31,6 +31,12 @@ export async function vehicleBundle(id) {
   return tauri.invoke("vehicle_bundle", { id });
 }
 
+/** Every config of one car an export can build on: [{ path, source, pc, info }] (desktop only). */
+export async function vehicleConfigs(id) {
+  if (!tauri) return [];
+  return tauri.invoke("vehicle_configs", { id });
+}
+
 /** The game's English names for vehicles that name themselves with translation keys. */
 export async function vehicleNames() {
   if (!tauri) return {};

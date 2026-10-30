@@ -191,13 +191,17 @@ free-flowing. The muffler and catalytic converter set the tailpipe's muffling, t
 backfires. A car whose exhaust slot can't be found keeps its own exhaust, and the export says so.
 
 It also writes a **vehicle config** for the car (`crankcase_<name>.pc` with its
-`info_crankcase_<name>.json`), so the design's gearing comes along: a stock config of the
-car (read from the game) with your engine, exhaust, flywheel and any turbo, the car's adjustable race gearbox for your number
-of gears and its adjustable final drives swapped in, and every ratio set (a car with no adjustable
-gearbox keeps its own). It appears in the
-vehicle selector as *Crankcase: your design*. Everything else, tyres included, stays as the
-stock config has it; if the car's tyres aren't the size the gearing was worked out on, the
-export says by how much every speed will differ (see
+`info_crankcase_<name>.json`), so the design's gearing comes along. It's built on a config you
+pick in the export panel (*Build on*): the car's default, any of its stock configs, one from a
+mod, or an earlier export. Crankcase swaps in your engine, exhaust, flywheel and any turbo, the
+car's adjustable race gearbox for your number of gears and its adjustable final drives, and sets
+every ratio (a car with no adjustable gearbox keeps its own). It changes only those slots and
+variables: everything else in the base config, tyres, suspension and paint included, stays as it
+was. So another tool that owns other slots (a suspension designer, say) can build on Crankcase's
+config, or Crankcase on its, in either order, and the result holds both. Parts left over from an
+earlier Crankcase export that this design doesn't use (an old turbo) go back to the car's own. It
+appears in the vehicle selector as *Crankcase: your design*. If the car's tyres aren't the size
+the gearing was worked out on, the export says by how much every speed will differ (see
 [`ui/lib/vehicleconfig.js`](ui/lib/vehicleconfig.js)).
 
 The engine **sound** is a stock recording of the closest layout (an inline six, a boxer, a

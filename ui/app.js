@@ -10,7 +10,7 @@ import { slug } from "./lib/export.js";
 import { PROFILES, DEFAULT_PROFILE, familyFor } from "./lib/profiles.js";
 import { checkFit } from "./lib/fit.js";
 import { buildEngine, exportRelativePath, infoRelativePath, donorFiles } from "./lib/export.js";
-import { listCars, carDetector } from "./lib/cars.js";
+import { listCars, carDetector, listConfigs } from "./lib/cars.js";
 import { buildConfig, gearboxFor } from "./lib/vehicleconfig.js";
 import { chart, align, C } from "./lib/chart.js";
 import * as platform from "./lib/platform.js";
@@ -1030,6 +1030,9 @@ function openExport() {
     (box ? `<div class="read">Also writes a <b>vehicle config</b> for the ${prof.name} with this engine and your gearing: ` +
       `${box.label} at ${gears}, Race Adjustable final drive at ${d.finalDrive.toFixed(2)}. ` +
       `The rest of the car is the stock config; tyres stay the car's own.</div>` : "") +
+    (prof.config && platform.isDesktop ? `<div class="read"><label class="name">Build on <select id="baseConfig"><option>Reading the car's configs…</option></select></label>` +
+      `<div class="note">Crankcase sets only the engine, its flywheel, intake and exhaust, and the gearing; everything else comes from this config. ` +
+      `Pick another tool's config (a suspension, say) to get both in one, in either order.</div></div>` : "") +
     `<code>${state.folder ? `${state.folder}/${rel}` : rel}</code>` +
     `<div class="read"><b>Then in BeamNG</b><ol>` +
     `<li>First export only: restart the game so it finds the new mod. If a new config doesn't show in the vehicle selector, restart once more.</li>` +
@@ -1041,6 +1044,26 @@ function openExport() {
     `<div class="row"><button id="exportCancel" class="btn">Close</button>` +
     `<button id="exportGo" class="btn primary" ${platform.isDesktop ? "" : "disabled"}>Write files</button></div>`;
   $("exportCancel").onclick = () => { panel.hidden = true; };
+  // the base config: remembered per car, the car's default config until one is picked
+  let configs = [];
+  const baseKey = `base.${prof.vehicle}`;
+  if ($("baseConfig")) {
+    cars.names().then((names) => listConfigs(platform, prof, names)).then((list) => {
+      configs = list;
+      const sel = $("baseConfig");
+      if (!sel) return;
+      const own = exportRelativePath(d, prof, "pc").split("/").pop();
+      const remembered = platform.store.get(baseKey, prof.config.base);
+      const pick = list.some((c) => c.path === remembered) ? remembered : prof.config.base;
+      const group = (label, xs) => xs.length ? `<optgroup label="${label}">` + xs.map((c) =>
+        `<option value="${c.path}" ${c.path === pick ? "selected" : ""}>${c.label}${c.isDefault ? " (default)" : ""}` +
+        `${c.own && c.path.endsWith("/" + own) ? " (this design's last export)" : ""}</option>`).join("") + "</optgroup>" : "";
+      sel.innerHTML = group("Stock", list.filter((c) => c.stock)) + group("Mods", list.filter((c) => !c.stock && !c.own)) +
+        group("Earlier Crankcase exports", list.filter((c) => c.own));
+      if (!list.length) sel.innerHTML = `<option value="${prof.config.base}">${prof.config.base.split("/").pop()}</option>`;
+      sel.onchange = () => platform.store.set(baseKey, sel.value);
+    });
+  }
   $("exportGo").onclick = async () => {
     const msg = $("exportMsg");
     try {
@@ -1048,7 +1071,10 @@ function openExport() {
       const donor = await Promise.all(donorFiles(fam).map((f) => platform.readVehicleFile(f)));
       const built = buildEngine(d, prof, donor);
       const { text, dae } = built;
-      const cfg = prof.config ? buildConfig(d, prof, await platform.readVehicleFile(prof.config.base), built) : null;
+      const basePath = $("baseConfig")?.value || prof.config?.base;
+      const chosen = configs.find((c) => c.path === basePath);
+      const baseText = chosen ? chosen.pc : prof.config ? await platform.readVehicleFile(prof.config.base) : null;
+      const cfg = prof.config ? buildConfig(d, prof, baseText, built, chosen && !chosen.isDefault ? chosen.label : null) : null;
       await platform.exportFile(exportRelativePath(d, prof, "dae"), dae);
       const r = await platform.exportFile(rel, text);
       let notes = [];

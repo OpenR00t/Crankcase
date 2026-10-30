@@ -168,6 +168,13 @@ fn vehicle_bundle(id: String) -> Result<std::collections::BTreeMap<String, Strin
     Ok(index(false).bundle(&id))
 }
 
+/// Every config of a car an export can start from: the game's, mods', and earlier exports.
+#[tauri::command]
+fn vehicle_configs(id: String) -> Result<Vec<vehicles::ConfigEntry>, String> {
+    valid_vehicle_dir(&id)?;
+    Ok(index(false).configs(&id))
+}
+
 /// The game's English vehicle names, for vehicles that name themselves with translation keys.
 #[tauri::command]
 fn vehicle_names() -> std::collections::BTreeMap<String, String> {
@@ -344,6 +351,7 @@ fn main() {
             list_vehicles,
             vehicle_bundle,
             vehicle_names,
+            vehicle_configs,
             read_vehicle_file,
             export_jbeam,
             read_crank,
