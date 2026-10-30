@@ -24,7 +24,8 @@ export const VERSION = 1;
 export const EXTENSION = "crank";
 
 const ENGINE_KEYS = ["layout", "cylinders", "bore", "stroke", "build", "compression", "fuel",
-  "duration", "lift", "runner", "rings", "bearings", "oil", "sump", "flywheel", "crank"];
+  "duration", "lift", "runner", "rings", "bearings", "oil", "sump", "flywheel", "crank",
+  "induction", "turboLayout", "scType", "boost", "spoolRpm", "handoverRpm"];
 
 /** The file text for a design. */
 export function toCrank(d) {

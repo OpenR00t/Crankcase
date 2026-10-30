@@ -4,12 +4,14 @@
 // The engine model. Deliberately simple and readable: every step is a
 // textbook relationship, so the numbers can be followed by hand.
 //
-//   air in   = displacement x volumetric efficiency x air density
+//   air in   = displacement x volumetric efficiency x air density (x boost, if any)
 //   work out = fuel energy (air / AFR x LHV) x indicated efficiency
 //   torque   = work per cycle / 4 pi            (4-stroke: one cycle per 2 revs)
 //   brake    = indicated torque - friction torque
 //
 // Units: SI inside (m, m^3, Pa, J, N m, rad/s); mm, litres, kPa and kW at the edges.
+
+import { chargeFactor, superchargerLoss, turboFactor } from "./induction.js";
 
 export const AIR_DENSITY = 1.18;        // kg/m^3, sea level at ~25 C
 export const FUEL_LHV = 44e6;           // J/kg, petrol lower heating value
@@ -128,14 +130,17 @@ export function volumetricEfficiency(d, rpm) {
  * Knock index: how close the unburnt mixture comes to exploding on its own
  * before the flame reaches it. It rises with
  *  - the compression ratio (hotter, denser mixture at the end of compression),
- *  - how full the cylinder is (VE: a full cylinder squeezes more mixture),
+ *  - how full the cylinder is (VE: a full cylinder squeezes more mixture; boost fills it further),
  *  - the bore (the flame has further to travel, giving the far side time to go off),
  *  - low rpm (the burn takes longer in real time).
  * Above the fuel's limit the ECU retards the ignition, which costs torque.
  */
 export function knockIndex(d, rpm) {
   const ve = volumetricEfficiency(d, rpm);
-  return d.compression * Math.pow(ve, 0.9) * Math.pow(d.bore / 86, 0.6) * Math.pow(2500 / Math.max(rpm, 1000), 0.12);
+  // Boost counts for less than its air: the charge is intercooled and a boosted engine's
+  // timing is mapped for it. With this, about 9:1 runs 10 psi on 91 and 8.5:1 runs 15 psi on 93.
+  const boost = Math.pow(chargeFactor(d, rpm), 0.55);
+  return d.compression * Math.pow(ve, 0.9) * boost * Math.pow(d.bore / 86, 0.6) * Math.pow(2500 / Math.max(rpm, 1000), 0.12);
 }
 
 export function fuelLimit(d) {
@@ -148,6 +153,14 @@ export function knockLoss(d, rpm) {
   return clamp(over * 2, 0, 0.35);
 }
 
+/**
+ * How full the cylinder gets at full throttle, as a share of its swept volume at
+ * ambient density: the VE, times whatever boost adds (see induction.js).
+ */
+export function cylinderFilling(d, rpm) {
+  return volumetricEfficiency(d, rpm) * chargeFactor(d, rpm);
+}
+
 /** Indicated thermal efficiency from compression ratio (scaled Otto cycle). */
 export function indicatedEfficiency(d) {
   return REAL_CYCLE_FACTOR * (1 - Math.pow(d.compression, 1 - GAMMA_EFF));
@@ -155,7 +168,7 @@ export function indicatedEfficiency(d) {
 
 /** Torque from combustion before any friction, N m (after any knock-limited timing). */
 export function indicatedTorque(d, rpm) {
-  const airPerCycle = volumetricEfficiency(d, rpm) * AIR_DENSITY * displacement(d); // kg
+  const airPerCycle = cylinderFilling(d, rpm) * AIR_DENSITY * displacement(d); // kg
   const work = (airPerCycle / AFR_POWER) * FUEL_LHV * indicatedEfficiency(d);        // J per cycle
   return (work / (4 * Math.PI)) * (1 - knockLoss(d, rpm));
 }
@@ -180,7 +193,16 @@ export function frictionTorque(d, rpm) {
 
 /** Torque at the flywheel, N m. */
 export function brakeTorque(d, rpm) {
-  return indicatedTorque(d, rpm) - frictionTorque(d, rpm);
+  return indicatedTorque(d, rpm) - frictionTorque(d, rpm) - superchargerDrive(d, rpm);
+}
+
+/**
+ * Torque spent turning a supercharger, N m: a share of the engine's own (unboosted)
+ * torque that grows with blower speed, scaled by any turbo, as the game takes it.
+ */
+export function superchargerDrive(d, rpm) {
+  const loss = superchargerLoss(d, rpm);
+  return loss > 0 ? loss * turboFactor(d, rpm) * indicatedTorque({ ...d, induction: "none" }, rpm) : 0;
 }
 
 export const kW = (torque, rpm) => (torque * rpm) / 9549.3;

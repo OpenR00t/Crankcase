@@ -17,6 +17,10 @@ import { CAM, INTERNALS, overlap, tunedRpm, springFriction, durability, resolve 
 import { TIRES, analyseGearing, ratios, tireRadius, SHIFT_STYLES, shiftTime } from "./gearing.js";
 import { FLYWHEELS, CRANKS, crankInertia, flywheelInertia, totalInertia, revUp, dropIn, matchTime, equivalentMass, closedThrottleDrag, pumpingTorque } from "./rotating.js";
 import { LAYOUTS, vAngle, layoutName } from "./geometry.js";
+import { INDUCTIONS, TURBO_LAYOUTS, SUPERCHARGERS, turboSpec, steadyBoost, boostEfficiency, fullBoostRpm, boostRiseTime,
+  naturallyAspirated, hasTurbo, hasSupercharger, superchargerLoss, turboFactor, inductionLabel } from "./induction.js";
+import { analyse as analyseEngine, superchargerDrive } from "./engine.js";
+import { familyFor, PROFILES, DEFAULT_PROFILE } from "./profiles.js";
 
 const ORD = ["1st", "2nd", "3rd", "4th", "5th", "6th"];
 const f0 = (v) => Math.round(v).toLocaleString("en-US");
@@ -251,7 +255,7 @@ export const SECTIONS = [
       "squeeze too hard and the last of the mixture explodes on its own before the flame reaches it. The ECU " +
       "hears it and pulls the ignition timing back, which costs torque. Better fuel (higher octane) resists knock.",
     controls: [
-      { key: "compression", label: "Compression ratio", type: "range", min: 8, max: 14, step: 0.1, fmt: (v) => `${v.toFixed(1)}:1` },
+      { key: "compression", label: "Compression ratio", type: "range", min: 7, max: 14, step: 0.1, fmt: (v) => `${v.toFixed(1)}:1` },
       { key: "fuel", label: "Fuel", type: "choice", options: Object.entries(FUELS).map(([k, f]) => [k, f.label]) },
     ],
     figures(d, a) {
@@ -292,6 +296,155 @@ export const SECTIONS = [
         "race engines on race fuel 13:1 and up.",
         "Ethanol (E85) resists knock very well, but Crankcase doesn't yet model the extra fuel it needs.",
       ];
+    },
+  },
+  {
+    id: "induction",
+    title: "Forced induction",
+    tagline: "Turbos and superchargers: pushing in more air than the engine could draw",
+    intro:
+      "Forced induction pushes air into the engine, so each cylinder takes in <b>more air than its own suction " +
+      "could</b>, and more air burns more fuel. A <b>turbo</b> is spun by the exhaust: free power, but it needs " +
+      "exhaust flow first, so it builds with rpm and lags behind the throttle. A <b>supercharger</b> is driven " +
+      "by a belt from the crank: boost straight away, but it costs power to turn. <b>Twincharging</b> uses a " +
+      "supercharger low down and hands over to a turbo. Either way, a fuller cylinder knocks sooner, so boost " +
+      "usually means lower compression or better fuel.",
+    controls: [
+      { key: "induction", label: "Induction", type: "choice", relayout: true,
+        options: Object.entries(INDUCTIONS).map(([k, o]) => [k, o.label]) },
+      { key: "turboLayout", label: "Turbo layout", type: "choice", relayout: true,
+        options: Object.entries(TURBO_LAYOUTS).map(([k, o]) => [k, o.label]), show: (d) => d.induction === "turbo" },
+      { key: "scType", label: "Supercharger", type: "choice", relayout: true,
+        options: Object.entries(SUPERCHARGERS).map(([k, o]) => [k, o.label]), show: (d) => hasSupercharger(d) },
+      { key: "boost", label: "Boost", type: "range", min: 3, max: 30, step: 0.5,
+        fmt: (v) => `${v.toFixed(1)} psi (${(v * 0.0689476).toFixed(2)} bar)`, show: (d) => d.induction !== "none" },
+      { key: "spoolRpm", label: (d) => (d.turboLayout === "sequential" ? "Small turbo full boost from" : "Full boost from (turbo size)"), type: "range", min: 1500, max: (d) => Math.max(2000, redline(d) - 500), step: 100,
+        fmt: (v) => `${f0(v)} rpm`, show: (d) => d.induction === "turbo" },
+      { key: "handoverRpm", label: (d) => (d.induction === "twincharged" ? "Supercharger hands over to the turbo at" : "Big turbo joins at"), type: "range", min: 2000, max: (d) => Math.max(2500, redline(d) - 300), step: 100,
+        fmt: (v) => `${f0(v)} rpm`, show: (d) => d.induction === "twincharged" || (d.induction === "turbo" && d.turboLayout === "sequential") },
+    ],
+    figures(d, a) {
+      if (d.induction === "none") {
+        return [fig("Induction", "naturally aspirated"), fig("Peak torque", `${f0(a.peakTorque)} N·m @ ${f0(a.peakTorqueRpm)}`)];
+      }
+      const na = analyseEngine(naturallyAspirated(d), 100);
+      const full = fullBoostRpm(d);
+      const worst = Math.max(...a.knock), margin = a.knockLimit / worst - 1;
+      const out = [
+        fig("Induction", inductionLabel(d)),
+        fig(d.induction === "supercharger" ? "Peak boost" : "Boost", `${d.boost.toFixed(1)} psi`,
+          hasTurbo(d) ? `Wastegate opens at ${turboSpec(d).wastegateStart} psi; BeamNG holds the boost about 0.5 psi above that. The in-game slider starts there.`
+            : "The most the supercharger makes, at the top of its range: its boost follows its own speed, and so the engine's."),
+        fig("Full boost from", full ? `${f0(full)} rpm` : "never", "Where steady full-throttle boost first reaches the target.", full ? null : "crit"),
+      ];
+      if (hasSupercharger(d)) {
+        const lossKw = Math.max(...a.rpm.map((r) => superchargerDrive(d, r) * r / 9549.3));
+        out.push(fig("Drive loss", `up to ${f0(lossKw)} kW`, "Power the belt takes to turn the supercharger: it grows with its speed."));
+      }
+      if (d.induction === "turbo") {
+        const spec = turboSpec(d);
+        out.push(fig("Boost builds", `${spec.pressureRatePSI} psi/s · ${f2(boostRiseTime(d))} s to full`,
+          "Once the revs allow it, how quickly the boost can rise after you open the throttle: the turbo's lag. Bigger turbos are slower; twins and twin-scroll respond quicker."));
+      } else {
+        out.push(fig("Response", d.induction === "twincharged" ? "instant, then turbo" : "instant", "A supercharger is geared to the crank: its boost is there as soon as the throttle opens."));
+      }
+      out.push(
+        fig("Peak torque", `${f0(a.peakTorque)} N·m @ ${f0(a.peakTorqueRpm)} · +${pct(a.peakTorque / na.peakTorque - 1)}`, `Naturally aspirated: ${f0(na.peakTorque)} N·m`),
+        fig("Peak power", `${f0(a.peakPower)} kW @ ${f0(a.peakPowerRpm)} · +${pct(a.peakPower / na.peakPower - 1)}`, `Naturally aspirated: ${f0(na.peakPower)} kW`),
+        fig("Knock margin", margin >= 0 ? `${(margin * 100).toFixed(0)}%` : "knocking",
+          `Under boost, worst point ${worst.toFixed(1)} against ${a.knockLimit.toFixed(1)} for ${FUELS[d.fuel].label}`,
+          margin < 0 ? "crit" : margin < 0.03 ? "warn" : null),
+      );
+      return out;
+    },
+    notes(d, a) {
+      const out = [];
+      if (d.induction === "none") return out;
+      const knocking = a.rpm.filter((r, k) => a.lost[k] > 0);
+      if (knocking.length) {
+        // knock rises in step with the compression ratio, so the highest clean ratio follows directly
+        const worst = Math.max(...a.knock);
+        const cr = Math.floor((d.compression * a.knockLimit / worst) * 10) / 10;
+        const clean = cr >= 7 ? cr : null;
+        out.push(crit(`Knocks under boost: −${f0(a.knockLost)} N·m · ` + (clean ? `clean at ${clean.toFixed(1)}:1` : "lower the boost or use better fuel"),
+          `It knocks from ${f0(knocking[0])} to ${f0(knocking[knocking.length - 1])} rpm. ` +
+          "Boost fills the cylinder further, and a fuller cylinder squeezes the mixture harder, so it goes off on its own. " +
+          "The ECU pulls timing and the torque is lost (the export makes the game deliver only what's left). " +
+          (clean ? `At this boost it runs clean at about <b>${clean.toFixed(1)}:1</b> on ${FUELS[d.fuel].label}; ` : "") +
+          "or use better fuel, or less boost."));
+      }
+      if (!fullBoostRpm(d)) {
+        out.push(crit("Full boost never arrives below redline",
+          "The turbo is too big for this engine's exhaust flow, or its full-boost rpm is past the redline. Bring it down."));
+      }
+      const red = redline(d);
+      if (d.induction === "turbo") {
+        const effTop = boostEfficiency(d, red);
+        if (effTop < 0.85) {
+          out.push(info(`Small turbo: ${pct(effTop)} efficient at redline, the top end fades`,
+            "A turbo sized for early boost can't flow enough air at high rpm: it heats the charge and the gain falls away. " +
+            "A later full-boost point (a bigger turbo), or a sequential pair, keeps pulling to redline."));
+        }
+        if (boostRiseTime(d) > 0.45) {
+          out.push(info(`Laggy: ${f2(boostRiseTime(d))} s for the boost to build`,
+            "A big turbo takes longer to spin up after you open the throttle, even above its full-boost rpm. Twins or twin-scroll respond quicker."));
+        }
+        if (d.turboLayout === "sequential") {
+          let dip = Infinity, at = 0;
+          for (let r = d.handoverRpm - 600; r <= d.handoverRpm + 600; r += 25) { const b = steadyBoost(d, r); if (b < dip) { dip = b; at = r; } }
+          if (dip < d.boost - 0.3) out.push(info(`Hand-over around ${f0(at)} rpm: boost dips to ${dip.toFixed(1)} psi`,
+            "As the small turbo runs out of breath and the big one comes in, steady boost sags a little. Accelerating hard through it, " +
+            "real sequential cars feel a bigger step for a moment (the big turbo still spinning up): the game shows that only as its usual boost lag."));
+        }
+      }
+      if (hasSupercharger(d)) {
+        let loss = 0, at = 0;
+        for (const r of a.rpm) { const l = superchargerLoss(d, r) * turboFactor(d, r); if (l > loss) { loss = l; at = r; } }
+        out.push(info(`Supercharger takes up to ${pct(loss)} of the torque to drive (at ${f0(at)} rpm)`,
+          "The belt turns it whether the engine needs boost or not, and harder the faster it spins. " +
+          (d.scType === "roots" ? "A roots blower costs the most at high rpm." : d.scType === "centrifugal" ? "A centrifugal costs the least, but gives little down low." : "A twin-screw is the most efficient positive-displacement type.")));
+        if (d.scType === "centrifugal") {
+          const r = 3000, b = steadyBoost(d, r);
+          if (b < 0.5 * d.boost) out.push(info(`Little boost down low: ${b.toFixed(1)} psi at 3,000 rpm`, "A centrifugal's boost climbs with its speed: like a turbo with no lag, but its full boost only arrives near redline."));
+        }
+      }
+      if (overlap(d) > 45 && hasTurbo(d)) {
+        out.push(info(`Long cam overlap (${overlap(d)}°) under boost`,
+          "With both valves open around TDC, boost blows some fresh charge straight out of the exhaust. Turbo engines usually run less overlap. Crankcase doesn't take this off the torque yet."));
+      }
+      return out;
+    },
+    background(d, a, ctx) {
+      const fam = familyFor(ctx?.profile ?? PROFILES[DEFAULT_PROFILE], d.layout);
+      const out = [];
+      if (hasTurbo(d)) {
+        out.push(`<b>${(TURBO_LAYOUTS[d.turboLayout] ?? TURBO_LAYOUTS.single).label} turbo</b>: ${(TURBO_LAYOUTS[d.turboLayout] ?? TURBO_LAYOUTS.single).note}.`,
+          "<b>How BeamNG runs a turbo</b>: exhaust power (from the engine's speed, load and airflow) spins the turbine against " +
+          "back pressure and friction; the turbine speed gives the boost from the compressor's map; the wastegate holds it at " +
+          "its setting; the engine's torque is multiplied by about 6% per psi, times the turbo's efficiency at that rpm. Boost " +
+          "can rise only so fast, which is the lag. A pair of turbos is one turbo device in the game, tuned to behave like the pair.");
+      }
+      if (hasSupercharger(d)) {
+        const t = SUPERCHARGERS[d.scType] ?? SUPERCHARGERS.roots;
+        out.push(`<b>${t.label} supercharger</b>: ${t.note}.`,
+          "<b>How BeamNG runs a supercharger</b>: the blower turns at engine rpm times its pulley ratio; its boost is its speed " +
+          "times a shape for its type; it adds about 6% torque per psi and takes a share of the torque, growing with its speed, to drive.");
+      }
+      if (d.induction === "twincharged") {
+        out.push("<b>Twincharged</b>: the supercharger's clutch starts letting go at 65% of the hand-over rpm and is out by the " +
+          "hand-over, while the turbo (full boost at the hand-over) takes its place. Below that the turbo only tops the supercharger up to the design's boost.");
+      }
+      out.push(
+        "Crankcase uses the game's own sums, so the curves here are what the game makes. " +
+        `<b>In the game</b> it's a part for the intake slot, <i>Crankcase: your design</i>, built on the ${hasTurbo(d) ? fam?.intake?.turboLabel ?? "stock turbo" : "stock intake"} ` +
+        "for its pipework, intercooler, nodes and sounds, with the design's own turbos or blower as its model; the exported config fits it. " +
+        (hasTurbo(d) ? "The boost stays adjustable on the in-game slider. " : "") +
+        "Knock at the design's boost is built into the part, so the game makes the torque shown here (BeamNG has no knock).",
+        "<b>Exhaust</b>: these numbers are with a free-flowing exhaust. The car's own exhaust part takes a little torque off, and " +
+        "BeamNG applies the boost after that, so with boost it costs several times as much (the BX's stock exhaust: about " +
+        "−10 N·m at 5,000 rpm and −21 at 8,000 before boost, so about −27 and −57 at 30 psi). Pick the exhaust in the game.",
+      );
+      return out;
     },
   },
   {
@@ -483,5 +636,6 @@ export function sectionNotes(section, d, a, ctx) {
 }
 
 export const COMING = [
-  ["Forced induction", "Turbos and superchargers: pushing in more air than the engine could draw."],
+  ["Direct injection", "Fuel sprayed straight into the cylinder cools the charge, so the engine takes more compression and boost before it knocks."],
+  ["Exhaust", "Design the exhaust (manifold, pipe size, silencing) and export it, since its back pressure matters even more with boost."],
 ];

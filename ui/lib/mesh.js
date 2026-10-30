@@ -139,6 +139,81 @@ export function engineParts(d, anchor) {
   return parts;
 }
 
+/**
+ * The forced induction's own model, as a separate mesh carried by the intake part
+ * (so swapping the intake in the game takes it away): turbos (compressor and turbine
+ * housings) on the exhaust side, one per bank for a V or a boxer's parallel twins;
+ * a supercharger on top of the intake (roots or twin-screw) or a centrifugal blower's
+ * snail at the front, with its drive pulley. Empty for a naturally aspirated design.
+ */
+export function inductionParts(d, anchor) {
+  const parts = [];
+  if (!d.induction || d.induction === "none") return parts;
+  const put = (name, part) => parts.push({ name, ...part });
+  const dim = dimensions(d);
+  const s = d.stroke / 1000;
+  const rear = anchor.y, front = anchor.y - dim.length;
+  const len = rear - front;
+  const cx = anchor.x, z0 = anchor.z;
+  const crankcase = 0.5 * s + 0.08;
+  const crankZ = d.layout === "flat" ? z0 + dim.height / 2 : z0 + crankcase;
+  const litres = (Math.PI / 4) * (d.bore / 1000) ** 2 * s * d.cylinders * 1000;
+  const turbo = d.induction === "turbo" || d.induction === "twincharged";
+  const sc = d.induction === "supercharger" || d.induction === "twincharged";
+
+  if (turbo) {
+    // housings scale with the engine and the turbo's size (a later full-boost rpm is a bigger turbo)
+    const size = Math.min(Math.max((d.spoolRpm ?? 3500) / 6500, 0.3), 1.2);
+    const base = (0.045 + 0.02 * Math.sqrt(litres / 2)) * (0.8 + 0.4 * size);
+    const one = (tag, x, z, y, r) => {
+      put(`turbo${tag}C`, pulley(x, z, r, y - 0.045, y + 0.005, "alloy"));          // compressor
+      put(`turbo${tag}S`, pulley(x, z, r * 0.45, y + 0.005, y + 0.03, "dark"));     // centre section
+      put(`turbo${tag}T`, pulley(x, z, r * 0.85, y + 0.03, y + 0.075, "dark"));     // turbine
+    };
+    const side = -1; // exhaust side: -x (the car's right) for an inline engine
+    const zEx = d.layout === "inline" ? z0 + dim.height * 0.62 : d.layout === "v" ? crankZ + 0.06 : z0 + dim.height * 0.15;
+    const xOut = (sgn, r) => cx + sgn * (dim.topHalf + r + 0.015);
+    const layout = d.induction === "twincharged" ? "single" : d.turboLayout || "single";
+    const pair = layout === "twin" || layout === "sequential";
+    if (d.layout === "inline" || !pair || layout === "sequential") {
+      if (pair) {
+        const rs = layout === "sequential" ? [base * 0.8, base * 1.15] : [base * 0.85, base * 0.85];
+        one("A", xOut(side, rs[0]), zEx, front + len * 0.28, rs[0]);
+        one("B", xOut(side, rs[1]), zEx, rear - len * 0.28, rs[1]);
+      } else {
+        const r = layout === "twinscroll" ? base * 1.05 : base;
+        one("A", xOut(side, r), zEx, front + len * 0.35, r);
+      }
+    } else {
+      // a V or a boxer's parallel twins: one per bank
+      const r = base * 0.85;
+      one("L", xOut(1, r), zEx, front + len * 0.35, r);
+      one("R", xOut(-1, r), zEx, front + len * 0.35, r);
+    }
+  }
+
+  if (sc) {
+    const type = d.scType || "roots";
+    const pulleyR = 0.045;
+    if (type === "centrifugal") {
+      const r = 0.06 + 0.02 * Math.sqrt(litres / 2);
+      const x = cx + (dim.topHalf - r) * 0.8, z = crankZ + Math.max(0.12, dim.height * 0.35);
+      put("scSnail", pulley(x, z, r, front - 0.07, front - 0.005, "alloy"));
+      put("scHub", pulley(x, z, r * 0.4, front - 0.1, front - 0.07, "chrome"));
+    } else {
+      // roots or twin-screw: a casing on top of the intake, as long as most of the engine
+      const w = 0.11 + 0.04 * Math.sqrt(litres / 2), h = 0.1 + 0.03 * Math.sqrt(litres / 2);
+      const x = d.layout === "inline" ? cx + dim.topHalf * 0.45 : cx;
+      const zb = z0 + dim.height - 0.03;
+      const y0 = front + len * 0.12, y1 = rear - len * 0.2;
+      put("scCase", block([x, 0, zb], [0, 0, 1], [1, 0, 0], 0, h, w, w * (type === "screw" ? 0.9 : 0.8), y0, y1, "alloy"));
+      put("scSnout", pulley(x, zb + h * 0.55, w * 0.22, front + 0.02, y0, "alloy"));
+      put("scPulley", pulley(x, zb + h * 0.55, pulleyR, front - 0.005, front + 0.02, "chrome"));
+    }
+  }
+  return parts;
+}
+
 /** Axis-aligned bounds of the model, for checks. */
 export function bounds(parts) {
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];

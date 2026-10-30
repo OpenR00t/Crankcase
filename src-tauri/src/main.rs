@@ -2,16 +2,20 @@
 // Copyright (C) 2026 The Crankcase contributors
 //
 // Crankcase's window. The engine model and the interface are plain web code
-// in ../ui; this side only finds BeamNG.drive on disk, reads the stock engine
-// files an export builds on, writes exported parts into the user folder, and
-// reads and writes .crank design files picked in the file dialogs.
+// in ../ui; this side only finds BeamNG.drive on disk, reads the vehicle files
+// (game and mods) that car detection and exports build on, writes exported
+// parts into the user folder, and reads and writes .crank design files picked
+// in the file dialogs.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::env;
 use std::fs;
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+mod vehicles;
+use vehicles::Index;
 
 /// Exports may only land inside this mod's own folder.
 const EXPORT_ROOT: &str = "mods/unpacked/crankcase/";
@@ -93,32 +97,76 @@ fn beamng_game_folder() -> Option<String> {
     find_game_folder().map(|p| p.display().to_string())
 }
 
-/// A vehicle zip name and a .jbeam entry inside it, checked before use.
-fn valid_game_entry(zip: &str, entry: &str) -> Result<(), String> {
-    let name_ok = !zip.is_empty() && zip.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+/// A .jbeam part or .pc config under vehicles/, checked before use.
+fn valid_vehicle_entry(entry: &str) -> Result<(), String> {
     // engine parts to borrow from, and stock vehicle configs to start a config from
-    let entry_ok = entry.starts_with("vehicles/")
-        && (entry.ends_with(".jbeam") || entry.ends_with(".pc"))
-        && !entry.contains("..");
-    if name_ok && entry_ok {
+    let ok = entry.starts_with("vehicles/") && (entry.ends_with(".jbeam") || entry.ends_with(".pc")) && !entry.contains("..");
+    if ok {
         Ok(())
     } else {
-        Err(format!("not a vehicle file: {zip}.zip / {entry}"))
+        Err(format!("not a vehicle file: {entry}"))
     }
 }
 
-/// Read one .jbeam or .pc file from content/vehicles/<zip>.zip in the game.
+/// The vehicle index, built on first use and rebuilt when the car list is refreshed.
+static INDEX: Mutex<Option<Arc<Index>>> = Mutex::new(None);
+
+fn index(rebuild: bool) -> Arc<Index> {
+    let mut slot = INDEX.lock().unwrap_or_else(|e| e.into_inner());
+    if rebuild || slot.is_none() {
+        let game = find_game_folder();
+        let user = find_user_folder();
+        *slot = Some(Arc::new(Index::build(game.as_deref(), user.as_deref())));
+    }
+    slot.clone().unwrap_or_default()
+}
+
+#[derive(serde::Serialize)]
+struct VehicleEntry {
+    id: String,
+    /// the vehicle's info.json, for its name, brand and type
+    info: String,
+}
+
+/// Every vehicle in the game and in active mods, with its info.json. Rescans the folders.
 #[tauri::command]
-fn read_game_file(zip: String, entry: String) -> Result<String, String> {
-    valid_game_entry(&zip, &entry)?;
-    let game = find_game_folder().ok_or("BeamNG.drive's install folder wasn't found. Set CRANKCASE_BEAMNG_GAME to it.")?;
-    let path = game.join("content").join("vehicles").join(format!("{zip}.zip"));
-    let file = fs::File::open(&path).map_err(|e| format!("opening {}: {e}", path.display()))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("reading {}: {e}", path.display()))?;
-    let mut item = archive.by_name(&entry).map_err(|e| format!("{entry} in {}: {e}", path.display()))?;
-    let mut text = String::new();
-    item.read_to_string(&mut text).map_err(|e| format!("reading {entry}: {e}"))?;
-    Ok(text)
+fn list_vehicles() -> Vec<VehicleEntry> {
+    let ix = index(true);
+    ix.vehicles()
+        .into_iter()
+        .map(|id| {
+            let info = ix.read(&format!("vehicles/{id}/info.json")).unwrap_or_default();
+            VehicleEntry { id, info }
+        })
+        .collect()
+}
+
+fn valid_vehicle_dir(id: &str) -> Result<(), String> {
+    if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') && !id.contains("..") {
+        Ok(())
+    } else {
+        Err(format!("not a vehicle folder: {id}"))
+    }
+}
+
+/// Every part, config and info file of one vehicle folder (or "common"), as path -> text.
+#[tauri::command]
+fn vehicle_bundle(id: String) -> Result<std::collections::BTreeMap<String, String>, String> {
+    valid_vehicle_dir(&id)?;
+    Ok(index(false).bundle(&id))
+}
+
+/// The game's English vehicle names, for vehicles that name themselves with translation keys.
+#[tauri::command]
+fn vehicle_names() -> std::collections::BTreeMap<String, String> {
+    find_game_folder().map(|g| vehicles::vehicle_names(&g)).unwrap_or_default()
+}
+
+/// One .jbeam or .pc file from wherever the game would load it (mods over the game).
+#[tauri::command]
+fn read_vehicle_file(entry: String) -> Result<String, String> {
+    valid_vehicle_entry(&entry)?;
+    index(false).read(&entry)
 }
 
 /// A relative path made only of normal components, inside the export root.
@@ -209,7 +257,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             beamng_user_folder,
             beamng_game_folder,
-            read_game_file,
+            list_vehicles,
+            vehicle_bundle,
+            vehicle_names,
+            read_vehicle_file,
             export_jbeam,
             read_crank,
             write_crank,
@@ -222,7 +273,16 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{crank_path, run_path, safe_relative, valid_game_entry};
+    use super::{crank_path, run_path, safe_relative, valid_vehicle_dir, valid_vehicle_entry};
+
+    #[test]
+    fn only_plain_vehicle_folders_are_bundled() {
+        assert!(valid_vehicle_dir("bx").is_ok());
+        assert!(valid_vehicle_dir("common").is_ok());
+        assert!(valid_vehicle_dir("../settings").is_err());
+        assert!(valid_vehicle_dir("a/b").is_err());
+        assert!(valid_vehicle_dir("").is_err());
+    }
 
     #[test]
     fn only_crank_files_are_opened_or_saved() {
@@ -234,11 +294,12 @@ mod tests {
 
     #[test]
     fn only_vehicle_jbeam_files_are_read() {
-        assert!(valid_game_entry("bx", "vehicles/bx/bx_engine_i4_large.jbeam").is_ok());
-        assert!(valid_game_entry("../bx", "vehicles/bx/a.jbeam").is_err());
-        assert!(valid_game_entry("bx", "vehicles/../settings/a.jbeam").is_err());
-        assert!(valid_game_entry("bx", "vehicles/bx/a.dae").is_err());
-        assert!(valid_game_entry("bx", "vehicles/bx/200bx_type_l_M.pc").is_ok());
+        assert!(valid_vehicle_entry("vehicles/bx/bx_engine_i4_large.jbeam").is_ok());
+        assert!(valid_vehicle_entry("vehicles/common/etk/etk_engine_i6.jbeam").is_ok());
+        assert!(valid_vehicle_entry("vehicles/../settings/a.jbeam").is_err());
+        assert!(valid_vehicle_entry("vehicles/bx/a.dae").is_err());
+        assert!(valid_vehicle_entry("settings/a.jbeam").is_err());
+        assert!(valid_vehicle_entry("vehicles/bx/200bx_type_l_M.pc").is_ok());
     }
 
     #[test]

@@ -28,6 +28,10 @@ export const PROFILES = {
         anchor: { x: 0, y: -0.97, z: 0.31 },
         // the stock engine's own long block and ECU; the design replaces both
         drop: ["bx_engine_internals_i4_large", "bx_engine_ecu_i4_large"],
+        // forced induction is written as a part for this intake slot: a turbo from this stock
+        // turbo (its pipework, intercooler, nodes and sounds), a supercharger from the slot's
+        // stock intake; the design sets everything that decides how they behave
+        intake: { slot: "bx_intake_i4_large", turboTemplate: "bx_intake_i4_large_stage2", turboLabel: "single turbo" },
       },
       v: {
         donorFile: "vehicles/bx/bx_engine_v8_4.5.jbeam",
@@ -36,6 +40,8 @@ export const PROFILES = {
         donorMass: 207,
         anchor: { x: 0, y: -1.044, z: 0.292 },
         drop: ["pickup_engine_v8_internals", "pickup_engine_v8_ecu"],
+        // the V8's stock turbos are a pair, one per bank, with their own exhaust manifolds
+        intake: { slot: "bx_intake_v8", turboTemplate: "bx_turbo_v8_stage3", turboLabel: "twin turbos (one per bank)" },
       },
     },
     // Flat engines borrow the inline donor (the BX has no boxer).

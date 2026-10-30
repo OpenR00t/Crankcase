@@ -19,10 +19,28 @@ export async function gameFolder() {
   try { return await tauri.invoke("beamng_game_folder"); } catch { return null; }
 }
 
-/** Read one .jbeam file from a vehicle's zip in the game (desktop only). */
-export async function readGameFile(zip, entry) {
+/** Every vehicle in the game and active mods: [{ id, info }] with info.json's text (desktop only). */
+export async function listVehicles() {
+  if (!tauri) return [];
+  return tauri.invoke("list_vehicles");
+}
+
+/** All parts, configs and info files of one vehicle folder, or "common": { path: text }. */
+export async function vehicleBundle(id) {
   if (!tauri) throw new Error("reading the game's files needs the desktop app");
-  return tauri.invoke("read_game_file", { zip, entry });
+  return tauri.invoke("vehicle_bundle", { id });
+}
+
+/** The game's English names for vehicles that name themselves with translation keys. */
+export async function vehicleNames() {
+  if (!tauri) return {};
+  return tauri.invoke("vehicle_names").catch(() => ({}));
+}
+
+/** One .jbeam or .pc file, from whichever mod or game archive the game would load it from. */
+export async function readVehicleFile(entry) {
+  if (!tauri) throw new Error("reading the game's files needs the desktop app");
+  return tauri.invoke("read_vehicle_file", { entry });
 }
 
 /** Write the file. Returns { path } in the app, { downloaded: name } in a browser. */

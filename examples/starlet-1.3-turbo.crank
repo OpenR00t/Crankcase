@@ -1,0 +1,51 @@
+{
+  "format": "crankcase",
+  "version": 1,
+  "name": "Starlet 1.3 turbo",
+  "notes": "A 4E-FTE-style 1.3 L turbo four, after the Toyota Starlet GT Turbo (EP82) and Glanza V (EP91): about 135 PS at 6,000-odd rpm and 160 N·m at 4,800, single small turbo, 8.2:1, mild cam.\n\nThe real car ran about 9 psi; this runs 5 psi because BeamNG's turbo model (which Crankcase follows) adds about 6% torque per psi, more than a small 90s turbo with a top-mount intercooler really gave. Gearing is close to the Starlet's 5-speed, with a final drive suited to the BX. The real car weighed about 850 kg: the lighter you get the BX, the closer it feels.",
+  "engine": {
+    "layout": "inline",
+    "cylinders": 4,
+    "bore": 74,
+    "stroke": 77.4,
+    "build": "road",
+    "compression": 8.2,
+    "fuel": "91",
+    "duration": 216,
+    "lift": 10,
+    "runner": 35,
+    "rings": "standard",
+    "bearings": "standard",
+    "oil": "5w30",
+    "sump": "wet",
+    "flywheel": "stock",
+    "crank": "full",
+    "induction": "turbo",
+    "turboLayout": "single",
+    "scType": "roots",
+    "boost": 5,
+    "spoolRpm": 3200,
+    "handoverRpm": 4500
+  },
+  "gearing": {
+    "gears": [
+      3.17,
+      1.9,
+      1.31,
+      0.97,
+      0.82
+    ],
+    "finalDrive": 4.1,
+    "tire": "195/60R15",
+    "shift": "quick"
+  },
+  "summary": {
+    "engine": "I4 1.33 L",
+    "peakPowerKw": 97,
+    "peakPowerRpm": 6100,
+    "peakTorqueNm": 163,
+    "peakTorqueRpm": 4800,
+    "redline": 7350,
+    "massKg": 123
+  }
+}

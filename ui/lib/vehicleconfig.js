@@ -8,7 +8,9 @@
 // suspension, intake and exhaust) stays as the stock config has it.
 
 import { parseJBeam } from "./jbeamparse.js";
-import { partName, flywheelPartName } from "./export.js";
+import { partName, flywheelPartName, inductionPartName } from "./export.js";
+import { familyFor } from "./profiles.js";
+import { turboSpec, hasTurbo } from "./induction.js";
 import { ratios, tireRadius } from "./gearing.js";
 import { analyse, hp } from "./engine.js";
 import { mass } from "./geometry.js";
@@ -24,7 +26,9 @@ export function tireSizeFromPart(part) {
 /** The gearbox a design gets: the adjustable box with enough gears. */
 export function gearboxFor(d, cfg) {
   const n = d.gearCount || 5;
-  return cfg.gearboxes[Math.max(n, 5)] || cfg.gearboxes[6];
+  const boxes = Object.values(cfg?.gearboxes ?? {}).sort((a, b) => a.gears - b.gears);
+  // the smallest box with enough gears, else the one with the most
+  return boxes.find((b) => b.gears >= Math.max(n, 5)) ?? boxes.find((b) => b.gears >= n) ?? boxes[boxes.length - 1] ?? null;
 }
 
 /**
@@ -41,15 +45,27 @@ export function buildConfig(d, profile, baseText) {
   const box = gearboxFor(d, cfg);
   const rs = ratios(d);
   parts[cfg.engineSlot] = partName(d, profile);
-  parts[cfg.gearboxSlot] = box.part;
-  parts[cfg.finalDriveSlot] = cfg.finalDrivePart;
+  if (box) parts[cfg.gearboxSlot] = box.part;
+  // one adjustable final drive per driven axle (a hand-written profile names just one)
+  const drives = cfg.finalDrives ?? (cfg.finalDriveSlot ? [{ slot: cfg.finalDriveSlot, part: cfg.finalDrivePart, var: cfg.finalDriveVar }] : []);
+  for (const fd of drives) parts[fd.slot] = fd.part;
   if (profile.flywheelSlot) parts[profile.flywheelSlot] = flywheelPartName(d, profile);
-  for (let i = 0; i < box.gears; i++) {
+  const fam = familyFor(profile, d.layout);
+  if (d.induction && d.induction !== "none" && fam.intake) {
+    parts[fam.intake.slot] = inductionPartName(d, profile);
+    if (hasTurbo(d)) vars.$wastegateStart = turboSpec(d).wastegateStart;
+  }
+  for (let i = 0; i < (box?.gears ?? 0); i++) {
     // a 4-speed design in a 5-speed box: the extra top gear repeats the last one
     vars[`$gear_${i + 1}`] = r3(rs[Math.min(i, rs.length - 1)]);
   }
-  vars[cfg.finalDriveVar] = r3(d.finalDrive);
-  if (rs.length < box.gears) {
+  for (const fd of drives) vars[fd.var] = r3(d.finalDrive);
+  if (!box) {
+    notes.push(`The ${profile.name} has no adjustable gearbox, so the config keeps its own gearbox` +
+      (drives.length ? "; only the final drive is set." : " and final drive."));
+  } else if (rs.length > box.gears) {
+    notes.push(`The ${profile.name}'s adjustable gearboxes have at most ${box.gears} gears, so the config uses the first ${box.gears} of yours.`);
+  } else if (rs.length < box.gears) {
     notes.push(`The ${profile.name} has no adjustable ${rs.length}-speed, so this uses the ${box.label} with ` +
       `gear ${rs.length + 1} set the same as gear ${rs.length}: shifting into it changes nothing.`);
   }
@@ -69,11 +85,11 @@ export function buildConfig(d, profile, baseText) {
   const a = analyse(d, 50);
   const info = {
     Configuration: `Crankcase: ${d.name}`,
-    Description: `${d.name}, designed in Crankcase, with ${box.label.toLowerCase()} gearing to match.`,
+    Description: box ? `${d.name}, designed in Crankcase, with ${box.label.toLowerCase()} gearing to match.` : `${d.name}, designed in Crankcase.`,
     "Config Type": "Custom",
     Drivetrain: cfg.drivetrain,
-    Transmission: box.transmission,
-    "Induction Type": "NA",
+    Transmission: box?.transmission ?? "Manual",
+    "Induction Type": { turbo: "Turbo", supercharger: "Supercharger", twincharged: "Twincharged" }[d.induction] || "NA",
     "Fuel Type": "Gasoline",
     Propulsion: "ICE",
     Power: Math.round(hp(a.peakPower)),

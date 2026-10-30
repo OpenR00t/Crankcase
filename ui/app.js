@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 The Crankcase contributors
-import { analyse, DEFAULT_DESIGN, BUILDS, FUELS, hp, bandStats, redline } from "./lib/engine.js";
+import { analyse, DEFAULT_DESIGN, BUILDS, FUELS, hp, bandStats, redline, brakeTorque } from "./lib/engine.js";
 import { SECTIONS, COMING, sectionNotes } from "./lib/sections.js";
 import { fixCylinders, layoutName, mass } from "./lib/geometry.js";
 import { resolve, migrate, DEFAULT_PARTS, valveLift } from "./lib/parts.js";
@@ -9,13 +9,15 @@ import { toCrank, fromCrank, EXTENSION } from "./lib/crankfile.js";
 import { slug } from "./lib/export.js";
 import { PROFILES, DEFAULT_PROFILE, familyFor } from "./lib/profiles.js";
 import { checkFit } from "./lib/fit.js";
-import { buildEngine, exportRelativePath, infoRelativePath } from "./lib/export.js";
+import { buildEngine, exportRelativePath, infoRelativePath, donorFiles } from "./lib/export.js";
+import { listCars, carDetector } from "./lib/cars.js";
 import { buildConfig, gearboxFor } from "./lib/vehicleconfig.js";
 import { chart, align, C } from "./lib/chart.js";
 import * as platform from "./lib/platform.js";
 import { parseLd, parseLdx } from "./lib/motec.js";
 import { analyseRun } from "./lib/run.js";
 import { revUp, revDrop, totalInertia } from "./lib/rotating.js";
+import { steadyBoost, fullBoostRpm, naturallyAspirated, superchargerBoost, turboBoost } from "./lib/induction.js";
 import { SHIFT_STYLES, shiftTime } from "./lib/gearing.js";
 
 const $ = (id) => document.getElementById(id);
@@ -34,10 +36,13 @@ const state = {
   game: null,
   run: null, // { name, data (parsed .ld), laps } — a run recorded in BeamNG, not saved
 };
-if (!PROFILES[state.target]) state.target = DEFAULT_PROFILE;
 state.design.cylinders = fixCylinders(state.design);
 state.baseline.cylinders = fixCylinders(state.baseline);
-const profile = () => PROFILES[state.target];
+// cars in the game and mods are worked out from their files when picked; until the
+// picked car is ready (or in a browser, where there are no game files) it's the BX
+const cars = carDetector(platform);
+const usable = (p) => p && p.support?.ok !== false;
+const profile = () => (usable(cars.known(state.target)) ? cars.known(state.target) : PROFILES[DEFAULT_PROFILE]);
 let charts = [];
 let pending = false;
 
@@ -123,6 +128,10 @@ function wireRatioTools() {
 // control shows the "not allowed" cursor and swallows the slider move, so none start.
 document.addEventListener("dragstart", (e) => e.preventDefault());
 
+/** A slider's limits: numbers, or worked out from the design. */
+const lo = (c) => (typeof c.min === "function" ? c.min(state.design) : c.min);
+const hi = (c) => (typeof c.max === "function" ? c.max(state.design) : c.max);
+
 function renderSection() {
   const l = SECTIONS.find((x) => x.id === state.section) || SECTIONS[0];
   // fit is about the engine's size and mass: not shown where nothing changes them
@@ -131,12 +140,12 @@ function renderSection() {
   const ctl = l.controls.filter((c) => !c.show || c.show(d)).map((c) => {
     if (c.type === "choice") {
       const options = typeof c.options === "function" ? c.options(d) : c.options;
-      return `<div class="ctl"><div class="lab"><span>${c.label}</span></div><div class="choices">` +
+      return `<div class="ctl"><div class="lab"><span>${typeof c.label === "function" ? c.label(d) : c.label}</span></div><div class="choices">` +
         options.map(([v, t]) => `<button data-key="${c.key}" data-v="${v}" class="${String(d[c.key]) === String(v) ? "on" : ""}">${t}</button>`).join("") +
         "</div></div>";
     }
-    return `<div class="ctl"><div class="lab"><span>${c.label}</span><span class="v" data-out="${c.key}" title="Click to type a value">${controlValue(c, d[c.key])}</span></div>` +
-      `<input type="range" data-key="${c.key}" min="${c.min}" max="${c.max}" step="${c.step}" value="${d[c.key]}"></div>`;
+    return `<div class="ctl"><div class="lab"><span>${typeof c.label === "function" ? c.label(d) : c.label}</span><span class="v" data-out="${c.key}" title="Click to type a value">${controlValue(c, d[c.key])}</span></div>` +
+      `<input type="range" data-key="${c.key}" min="${lo(c)}" max="${hi(c)}" step="${c.step}" value="${d[c.key]}"></div>`;
   }).join("");
   $("section").innerHTML =
     `<h2>${l.title}</h2><div class="tag">${l.tagline}</div>` +
@@ -163,7 +172,7 @@ function renderSection() {
       const c = l.controls.find((x) => x.key === out.dataset.out);
       const range = $("section").querySelector(`input[type=range][data-key="${c.key}"]`);
       const box = document.createElement("input");
-      box.type = "number"; box.className = "typed"; box.step = c.step; box.min = c.min; box.max = c.max;
+      box.type = "number"; box.className = "typed"; box.step = c.step; box.min = lo(c); box.max = hi(c);
       box.value = state.design[c.key];
       out.textContent = ""; out.appendChild(box); box.focus(); box.select();
       let done = false;
@@ -171,11 +180,11 @@ function renderSection() {
         if (done) return; done = true;
         const v = Number(box.value);
         if (apply && box.value.trim() !== "" && Number.isFinite(v)) {
-          const clamped = Math.min(c.max, Math.max(c.min, v));
+          const clamped = Math.min(hi(c), Math.max(lo(c), v));
           state.design[c.key] = Math.round(clamped / c.step) * c.step;
           state.design[c.key] = Number(state.design[c.key].toFixed(6));
           range.value = state.design[c.key];
-          if (clamped !== v) out.title = `Kept within ${c.min} to ${c.max}`;
+          if (clamped !== v) out.title = `Kept within ${lo(c)} to ${hi(c)}`;
           changed();
         }
         out.textContent = controlValue(c, state.design[c.key]);
@@ -196,7 +205,7 @@ function renderSection() {
 
 function renderWhy(a) {
   const l = SECTIONS.find((x) => x.id === state.section) || SECTIONS[0];
-  const ctx = { car: carFor(state.design), gearingNote: profile().gearingNote };
+  const ctx = { car: carFor(state.design), gearingNote: profile().gearingNote, profile: profile() };
   const d = state.design;
   $("figs").innerHTML = (l.figures?.(d, a, ctx) ?? []).map((f) =>
     `<div class="fig${f.tone ? " " + f.tone : ""}${f.tip ? " has-more" : ""}"${f.tip ? ' tabindex="0"' : ""}>` +
@@ -372,12 +381,13 @@ const ICONS = { ok: "✓", warn: "!", fail: "✗", info: "i" };
 
 const SURFACE_COLOURS = { alloy: "#a89984", grey: "#665c54", dark: "#3c3836", cover: "#3c3836", chrome: "#d5c4a1" };
 
-function fitSvg(view, fit, prof, d) {
-  // side view: y (front at the left) against z; top view: y against x
-  const bay = prof.bay, fam = fit.family;
+function fitSvg(view, fit) {
+  // in the engine's own frame: side view is along the crank (nose at the left) against
+  // height, top view along the crank against width; the anchor (gearbox face, bottom) is 0
+  const bay = fit.bay;
   const W = 300, H = 180, pad = 16;
-  const ys = [fam.anchor.y + 0.1, bay.frontY - 0.12];
-  const vs = view === "side" ? [bay.minBottomZ - 0.08, bay.maxTopZ + 0.08] : [-bay.maxHalfWidth - 0.1, bay.maxHalfWidth + 0.1];
+  const ys = [0.1, -bay.front - 0.12];
+  const vs = view === "side" ? [bay.bottom - 0.08, bay.top + 0.08] : [-bay.halfWidth - 0.1, bay.halfWidth + 0.1];
   const s = Math.min((W - 2 * pad) / (ys[0] - ys[1]), (H - 2 * pad) / (vs[1] - vs[0]));
   const X = (y) => pad + (y - ys[1]) * s;
   const V = (v) => H - pad - (v - vs[0]) * s;
@@ -393,15 +403,18 @@ function fitSvg(view, fit, prof, d) {
   const outline = view === "side" ? ["e1r", "e2r", "e4r", "e3r"] : ["e3r", "e4r", "e4l", "e3l"];
   const colour = !fit.ok ? C.red : fit.checks.some((c) => c.level === "warn") ? C.yellow : C.green;
   const bayRect = view === "side"
-    ? [X(bay.frontY), V(bay.maxTopZ), X(fam.anchor.y) - X(bay.frontY), V(bay.minBottomZ) - V(bay.maxTopZ)]
-    : [X(bay.frontY), V(bay.maxHalfWidth), X(fam.anchor.y) - X(bay.frontY), V(-bay.maxHalfWidth) - V(bay.maxHalfWidth)];
+    ? [X(-bay.front), V(bay.top), X(0) - X(-bay.front), V(bay.bottom) - V(bay.top)]
+    : [X(-bay.front), V(bay.halfWidth), X(0) - X(-bay.front), V(-bay.halfWidth) - V(bay.halfWidth)];
+  const orient = fit.frame?.orientation ?? "longitudinal";
+  const limit = fit.toRadiator ? "radiator" : "bay limit";
+  const nose = orient === "longitudinal" ? "front ←" : orient === "transverse" ? "crank nose ←" : "rear ←";
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
     <rect x="${bayRect[0]}" y="${bayRect[1]}" width="${bayRect[2]}" height="${bayRect[3]}" fill="none" stroke="${C.bg3}" stroke-dasharray="5 4"/>
-    <line x1="${X(bay.frontY)}" y1="${pad / 2}" x2="${X(bay.frontY)}" y2="${H - pad / 2}" stroke="${C.blue}" stroke-width="1"/>
-    <text x="${X(bay.frontY) + 4}" y="${pad}" fill="${C.blue}" font-size="10">radiator</text>
+    <line x1="${X(-bay.front)}" y1="${pad / 2}" x2="${X(-bay.front)}" y2="${H - pad / 2}" stroke="${C.blue}" stroke-width="1"/>
+    <text x="${X(-bay.front) + 4}" y="${pad}" fill="${C.blue}" font-size="10">${limit}</text>
     ${model}
     <polygon points="${box(outline)}" fill="none" stroke="${colour}" stroke-width="1.2" stroke-dasharray="4 3"/>
-    <text x="${W - pad}" y="${H - 4}" fill="${C.gray}" font-size="10" text-anchor="end">front ←</text>
+    <text x="${W - pad}" y="${H - 4}" fill="${C.gray}" font-size="10" text-anchor="end">${nose}</text>
   </svg>`;
 }
 
@@ -410,8 +423,8 @@ function renderFit(a) {
   const fit = checkFit(state.design, prof, a);
   $("fitSub").textContent = `${layoutName(state.design)} in the ${prof.name} · ${prof.layoutNote}`;
   $("fitViews").innerHTML =
-    `<figure><figcaption>Side</figcaption>${fitSvg("side", fit, prof, state.design)}</figure>` +
-    `<figure><figcaption>Top</figcaption>${fitSvg("top", fit, prof, state.design)}</figure>`;
+    `<figure><figcaption>Side</figcaption>${fitSvg("side", fit)}</figure>` +
+    `<figure><figcaption>Top</figcaption>${fitSvg("top", fit)}</figure>`;
   $("fitChecks").innerHTML = fit.checks.map((c) =>
     `<li class="${c.level}"><span class="ic">${ICONS[c.level]}</span><span class="read">${c.text}</span></li>`).join("");
   $("exportBtn").disabled = !fit.ok;
@@ -503,6 +516,57 @@ function onTimeGrid(curves, step, until) {
   return { x, ys: curves.map((c) => x.map((t) => at(c, t))) };
 }
 
+/** Forced induction: boost against rpm, and the torque with and without it. */
+function inductionChart(a, b) {
+  const d = state.design, bd = state.baseline;
+  const on = (x) => x.induction && x.induction !== "none";
+  $("sectionChartTitle").textContent = "Boost";
+  $("sectionChartSub").textContent = "psi at full throttle, steady · BeamNG's own turbo and supercharger sums";
+  const red = Math.max(redline(d), redline(bd));
+  const x = [];
+  for (let n = 1000; n <= red; n += 50) x.push(n);
+  const full = on(d) ? fullBoostRpm(d) : null;
+  const twin = d.induction === "twincharged";
+  $("sectionLegend").innerHTML = `<span><i class="sw" style="background:var(--orange)"></i>Boost</span>` +
+    (twin ? `<span><i class="sw" style="background:var(--purple)"></i>Supercharger</span><span><i class="sw" style="background:var(--aqua)"></i>Turbo</span>` : "") +
+    `<span><i class="sw dash"></i>Baseline</span>`;
+  const top = Math.max(5, on(d) ? d.boost : 0, on(bd) ? bd.boost : 0) * 1.25 + 2;
+  const na = naturallyAspirated(d);
+  const naT = x.map((n) => (n <= redline(d) ? Math.max(0, brakeTorque(na, n)) : null));
+  const bT = x.map((n) => (n <= redline(d) ? Math.max(0, brakeTorque(d, n)) : null));
+  const mine = (f) => x.map((n) => (on(d) && n <= redline(d) ? f(n) : null));
+  const marks = [];
+  if (full) marks.push({ x: full, color: C.aqua, label: "full boost" });
+  if (twin || (d.induction === "turbo" && d.turboLayout === "sequential")) marks.push({ x: d.handoverRpm, color: C.purple, label: "hand-over" });
+  return {
+    x, xUnit: "rpm",
+    scales: { y: { label: "psi", range: [-3, Math.ceil(top)] } },
+    series: [
+      { label: "boost", name: "Boost", unit: "psi", fmt: (v) => v.toFixed(1), color: C.orange, values: mine((n) => steadyBoost(d, n)) },
+      ...(twin ? [
+        { label: "sc", name: "Supercharger", unit: "psi", fmt: (v) => v.toFixed(1), color: C.purple, width: 1.2, values: mine((n) => superchargerBoost(d, n)) },
+        { label: "turbo", name: "Turbo", unit: "psi", fmt: (v) => v.toFixed(1), color: C.aqua, width: 1.2, values: mine((n) => turboBoost(d, n)) },
+      ] : []),
+      { label: "base", name: "Baseline", unit: "psi", fmt: (v) => v.toFixed(1), color: C.fg4, dash: true, width: 1.5,
+        values: x.map((n) => (on(bd) && n <= redline(bd) ? steadyBoost(bd, n) : null)) },
+    ],
+    marks,
+    hlines: on(d) ? [{ y: d.boost, color: C.bg4, label: `${d.boost} psi` }] : [],
+    pin: "boost",
+    extra: {
+      x, height: 200, xUnit: "rpm",
+      title: "Torque with and without forced induction · N·m at the flywheel, after any knock and drive loss",
+      legend: `<span><i class="sw" style="background:var(--green)"></i>With it</span><span><i class="sw dash"></i>Naturally aspirated</span>`,
+      scales: { y: { label: "N·m", range: [0, Math.ceil(Math.max(...bT.filter((v) => v != null), 1) * 1.15 / 50) * 50] } },
+      series: [
+        { label: "boosted", name: "With it", unit: "N·m", fmt: (v) => Math.round(v), color: C.green, values: bT },
+        { label: "na", name: "NA", unit: "N·m", fmt: (v) => Math.round(v), color: C.fg4, dash: true, width: 1.5, values: naT },
+      ],
+      pin: "boostTorque",
+    },
+  };
+}
+
 /** The rotating-mass section's second chart: the revs with the throttle shut, through a shift. */
 function revDropChart() {
   const d = state.design, bd = state.baseline;
@@ -583,6 +647,7 @@ function sectionChart(a, b) {
       extra: valveDiagram(),
     };
   }
+  if (id === "induction") return inductionChart(a, b);
   if (id === "gearing") {
     const g = analyseGearing(state.design, carFor(state.design));
     const colours = [C.green, C.aqua, C.blue, C.purple, C.yellow, C.orange];
@@ -695,9 +760,55 @@ function changed() {
 /* ---------- design name, target, baseline ---------- */
 $("name").value = state.design.name;
 $("name").oninput = () => { state.design.name = $("name").value.trim() || "Untitled"; changed(); };
-$("target-car").innerHTML = Object.values(PROFILES).map((p) =>
-  `<option value="${p.id}" ${p.id === state.target ? "selected" : ""}>${p.name}</option>`).join("");
-$("target-car").onchange = () => { state.target = $("target-car").value; $("exportPanel").hidden = true; changed(); };
+/* the target car list: every car and truck, marked as it's checked */
+let carList = Object.values(PROFILES).map((p) => ({ id: p.id, name: p.name }));
+function carLabel(c) {
+  const p = cars.known(c.id);
+  if (!p) return { text: c.name, title: "Not checked yet: picking it reads its files" };
+  if (!p.support || p.support.ok) {
+    const how = p.detected ? "Worked out from the car's files" : "Checked profile";
+    return { text: c.name, title: [how, p.layoutNote, ...(p.support?.notes ?? [])].filter(Boolean).join("\n") };
+  }
+  return { text: `${c.name} (can't take an engine)`, title: p.support.reason, disabled: true };
+}
+function renderCarList() {
+  const sel = $("target-car");
+  sel.innerHTML = carList.map((c) => {
+    const l = carLabel(c);
+    return `<option value="${c.id}" title="${l.title.replace(/"/g, "&quot;")}" ${c.id === state.target ? "selected" : ""} ${l.disabled ? "disabled" : ""}>${l.text}</option>`;
+  }).join("");
+  if (!carList.some((c) => c.id === state.target)) sel.value = profile().id;
+}
+async function pickCar(id) {
+  state.target = id;
+  $("exportPanel").hidden = true;
+  const c = carList.find((x) => x.id === id);
+  $("target-car").disabled = true;
+  try { await cars.detect(id, c?.name); } finally { $("target-car").disabled = false; }
+  if (!usable(cars.known(id))) state.target = DEFAULT_PROFILE;
+  renderCarList();
+  changed();
+}
+$("target-car").onchange = () => pickCar($("target-car").value);
+renderCarList();
+async function loadCars() {
+  if (!platform.isDesktop) return;
+  try {
+    const names = await cars.names();
+    const found = await listCars(platform, names);
+    if (!found.length) return;
+    carList = found;
+    renderCarList();
+    await pickCar(carList.some((c) => c.id === state.target) ? state.target : DEFAULT_PROFILE);
+    // check the rest in the background, so the list shows which cars can take an engine
+    for (const c of carList) {
+      await cars.detect(c.id, c.name);
+      renderCarList();
+    }
+  } catch (e) {
+    console.warn("car list", e);
+  }
+}
 $("pinBtn").onclick = () => { state.baseline = { ...state.design }; changed(); };
 $("resetBtn").onclick = () => {
   const name = state.design.name;
@@ -788,9 +899,9 @@ function openExport() {
     const msg = $("exportMsg");
     try {
       // read and build everything first, so a failure writes nothing
-      const donor = await platform.readGameFile(prof.zip, fam.donorFile);
+      const donor = await Promise.all(donorFiles(fam).map((f) => platform.readVehicleFile(f)));
       const { text, dae } = buildEngine(d, prof, donor);
-      const cfg = prof.config ? buildConfig(d, prof, await platform.readGameFile(prof.zip, prof.config.base)) : null;
+      const cfg = prof.config ? buildConfig(d, prof, await platform.readVehicleFile(prof.config.base)) : null;
       await platform.exportFile(exportRelativePath(d, prof, "dae"), dae);
       const r = await platform.exportFile(rel, text);
       let notes = [];
@@ -815,3 +926,4 @@ renderSteps();
 renderSection();
 renderTarget();
 redraw();
+loadCars();

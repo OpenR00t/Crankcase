@@ -52,44 +52,56 @@ function triangulate(parts) {
 
 /** The .dae text for one mesh object named `name`. */
 export function writeDae(name, parts) {
-  const groups = triangulate(parts);
-  const mats = Object.keys(groups);
-  const id = name.replace(/[^A-Za-z0-9_]/g, "_");
-  const src = (sid, data, stride, params) =>
-    `<source id="${id}-${sid}"><float_array id="${id}-${sid}-array" count="${data.length}">${data.map(f).join(" ")}</float_array>` +
-    `<technique_common><accessor source="#${id}-${sid}-array" count="${data.length / stride}" stride="${stride}">` +
-    params.map((p) => `<param name="${p}" type="float"/>`).join("") + `</accessor></technique_common></source>`;
+  return writeDaeMeshes([{ name, parts }]);
+}
 
-  // one shared vertex list, with each material's triangles indexing into it
-  const pos = [], nrm = [], uv = [];
-  const tris = mats.map((m) => {
-    const g = groups[m], start = pos.length / 3;
-    pos.push(...g.pos); nrm.push(...g.nrm); uv.push(...g.uv);
-    const idx = Array.from({ length: g.count * 3 }, (_, i) => start + i);
-    return `<triangles material="${m}-material" count="${g.count}">` +
-      `<input semantic="VERTEX" source="#${id}-vertices" offset="0"/>` +
-      `<input semantic="NORMAL" source="#${id}-normals" offset="0"/>` +
-      `<input semantic="TEXCOORD" source="#${id}-map-0" offset="0" set="0"/>` +
-      `<input semantic="TEXCOORD" source="#${id}-map-0" offset="0" set="1"/>` +
-      `<p>${idx.join(" ")}</p></triangles>`;
-  });
+/** The .dae text for several mesh objects in one file: [{ name, parts }]. */
+export function writeDaeMeshes(meshes) {
+  const allMats = new Set();
+  const geometries = [], nodes = [];
+  for (const { name, parts } of meshes) {
+    const groups = triangulate(parts);
+    const mats = Object.keys(groups);
+    mats.forEach((m) => allMats.add(m));
+    const id = name.replace(/[^A-Za-z0-9_]/g, "_");
+    const src = (sid, data, stride, params) =>
+      `<source id="${id}-${sid}"><float_array id="${id}-${sid}-array" count="${data.length}">${data.map(f).join(" ")}</float_array>` +
+      `<technique_common><accessor source="#${id}-${sid}-array" count="${data.length / stride}" stride="${stride}">` +
+      params.map((p) => `<param name="${p}" type="float"/>`).join("") + `</accessor></technique_common></source>`;
 
-  return `<?xml version="1.0" encoding="utf-8"?>
-<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
-  <asset><contributor><authoring_tool>Crankcase</authoring_tool></contributor><unit name="meter" meter="1"/><up_axis>Z_UP</up_axis></asset>
-  <library_effects>${mats.map((m) => `<effect id="${m}-effect"><profile_COMMON><technique sid="common"><lambert><diffuse><color sid="diffuse">0.6 0.6 0.6 1</color></diffuse></lambert></technique></profile_COMMON></effect>`).join("")}</library_effects>
-  <library_materials>${mats.map((m) => `<material id="${m}-material" name="${m}"><instance_effect url="#${m}-effect"/></material>`).join("")}</library_materials>
-  <library_geometries><geometry id="${id}-mesh" name="${name}"><mesh>
+    // one shared vertex list, with each material's triangles indexing into it
+    const pos = [], nrm = [], uv = [];
+    const tris = mats.map((m) => {
+      const g = groups[m], start = pos.length / 3;
+      pos.push(...g.pos); nrm.push(...g.nrm); uv.push(...g.uv);
+      const idx = Array.from({ length: g.count * 3 }, (_, i) => start + i);
+      return `<triangles material="${m}-material" count="${g.count}">` +
+        `<input semantic="VERTEX" source="#${id}-vertices" offset="0"/>` +
+        `<input semantic="NORMAL" source="#${id}-normals" offset="0"/>` +
+        `<input semantic="TEXCOORD" source="#${id}-map-0" offset="0" set="0"/>` +
+        `<input semantic="TEXCOORD" source="#${id}-map-0" offset="0" set="1"/>` +
+        `<p>${idx.join(" ")}</p></triangles>`;
+    });
+    geometries.push(`<geometry id="${id}-mesh" name="${name}"><mesh>
     ${src("positions", pos, 3, ["X", "Y", "Z"])}
     ${src("normals", nrm, 3, ["X", "Y", "Z"])}
     ${src("map-0", uv, 2, ["S", "T"])}
     <vertices id="${id}-vertices"><input semantic="POSITION" source="#${id}-positions"/></vertices>
     ${tris.join("\n    ")}
-  </mesh></geometry></library_geometries>
-  <library_visual_scenes><visual_scene id="Scene" name="Scene">
-    <node id="${id}" name="${name}" type="NODE"><instance_geometry url="#${id}-mesh" name="${name}"><bind_material><technique_common>
+  </mesh></geometry>`);
+    nodes.push(`<node id="${id}" name="${name}" type="NODE"><instance_geometry url="#${id}-mesh" name="${name}"><bind_material><technique_common>
       ${mats.map((m) => `<instance_material symbol="${m}-material" target="#${m}-material"><bind_vertex_input semantic="${id}-map-0" input_semantic="TEXCOORD" input_set="0"/></instance_material>`).join("")}
-    </technique_common></bind_material></instance_geometry></node>
+    </technique_common></bind_material></instance_geometry></node>`);
+  }
+  const mats = [...allMats];
+  return `<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset><contributor><authoring_tool>Crankcase</authoring_tool></contributor><unit name="meter" meter="1"/><up_axis>Z_UP</up_axis></asset>
+  <library_effects>${mats.map((m) => `<effect id="${m}-effect"><profile_COMMON><technique sid="common"><lambert><diffuse><color sid="diffuse">0.6 0.6 0.6 1</color></diffuse></lambert></technique></profile_COMMON></effect>`).join("")}</library_effects>
+  <library_materials>${mats.map((m) => `<material id="${m}-material" name="${m}"><instance_effect url="#${m}-effect"/></material>`).join("")}</library_materials>
+  <library_geometries>${geometries.join("")}</library_geometries>
+  <library_visual_scenes><visual_scene id="Scene" name="Scene">
+    ${nodes.join("\n    ")}
   </visual_scene></library_visual_scenes>
   <scene><instance_visual_scene url="#Scene"/></scene>
 </COLLADA>

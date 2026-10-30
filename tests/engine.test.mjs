@@ -558,3 +558,247 @@ test("best shift points: where the next gear accelerates harder, redline if it n
   const wide = { ...d, gearCount: 4, gear1: 4.5, gear2: 2.2, gear3: 1.2, gear4: 0.7 };
   assert.ok(Gear.analyseGearing(wide, car).bestShifts.slice(1).every((s) => !s.early));
 });
+
+import * as Ind from "../ui/lib/induction.js";
+import * as VC3 from "../ui/lib/vehicleconfig.js";
+
+const TURBO_DONOR = DONOR.replace(/}\s*$/, `,
+"bx_intake_i4_large_stage2": {
+  "information": {"authors": "test", "name": "Stock turbo", "value": 1},
+  "slotType": "bx_intake_i4_large",
+  "variables": [["name", "type", "unit", "category", "default", "min", "max", "title", "description"],
+    ["$wastegateStart", "range", "psi", "Engine", 10, 7, 17, "Boost", "x"]],
+  "turbocharger": {"bovSoundFileName": "bov", "wastegateStart": "$wastegateStart", "maxExhaustPower": 35000,
+    "pressurePSI": [[0, -3.5], [250000, 38]], "engineDef": [[0, 0, 0], [9000, 0.9, 0.8]]},
+  "mainEngine": {"torqueModIntake": [["rpm", "torque"], [0, 0], [4000, 24]], "turbocharger": "turbocharger"},
+  "nodes": [["id", "posX", "posY", "posZ"], ["trb1", 0.247, -1.263, 0.486]],
+},
+}`);
+
+test("turbo: boost reaches its target at the full-boost rpm, fills the cylinders, and knocks", () => {
+  const na = Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS, ...Gear.DEFAULT_GEARING });
+  assert.equal(na.induction, "none");
+  assert.equal(Ind.chargeFactor(na, 4000), 1);
+  const t = { ...na, induction: "turbo", boost: 10, spoolRpm: 3500, compression: 9 };
+  const full = Ind.fullBoostRpm(t);
+  assert.ok(Math.abs(full - 3500) <= 150, `${full}`);
+  for (let rpm = 1000; rpm <= E.redline(t); rpm += 250) assert.ok(Ind.steadyBoost(t, rpm) <= 10.01);
+  assert.ok(Ind.steadyBoost(t, 2000) < Ind.steadyBoost(t, 3000));
+  // about 6% more torque per psi at full boost, before friction
+  const cf = Ind.chargeFactor(t, 5000);
+  assert.ok(cf > 1.5 && cf < 1.62, `${cf}`);
+  assert.ok(E.brakeTorque(t, 5000) > E.brakeTorque({ ...t, induction: "none" }, 5000) * 1.4);
+  // boost raises knock: 10.5:1 at 10 psi knocks on 91, 9:1 doesn't
+  assert.ok(E.analyse({ ...t, compression: 10.5 }).knockLost > 0);
+  assert.equal(E.analyse(t).knockLost, 0);
+  // a bigger turbo (later full boost) spins up more slowly
+  assert.ok(Ind.turboSpec({ ...t, spoolRpm: 5000 }).pressureRatePSI < Ind.turboSpec(t).pressureRatePSI);
+  // the spline matches BeamNG's: through the points
+  assert.equal(Ind.spline([[0, 0], [10, 5], [20, 7], [30, 8]], 10), 5);
+});
+
+/** BeamNG's full-throttle torque from exported parts: engine table, intake part's multiplier, turbo and supercharger. */
+function gameTorque(engine, ind, rpm) {
+  const curve = (rows) => rows.slice(1);
+  const base = Ind.spline(curve(engine.torque), rpm);
+  const mult = ind.mainEngine?.torqueModMult ? Ind.spline(curve(ind.mainEngine.torqueModMult), rpm) : 1;
+  let coef = 1;
+  const tc = ind.turbocharger;
+  if (tc && ind.mainEngine.turbocharger) {
+    const exh = tc.engineDef.map((p) => [p[0], Math.min(1, p[2])]), eff = tc.engineDef.map((p) => [p[0], p[1]]);
+    const target = ind.variables[1][4] + Number(tc.wastegateLimit.match(/\+([\d.]+)/)[1]) / 2;
+    const w = Math.min(Math.sqrt(Math.max(0.9 * rpm / engine.maxRPM * Ind.spline(exh, rpm) * tc.maxExhaustPower - tc.frictionCoef, 0) / tc.backPressureCoef), 250000 * 0.10471971768);
+    const psi = Math.min(Ind.spline(tc.pressurePSI, Math.floor(w * 9.5493)), target);
+    coef *= 1 + 0.0000087 * psi * 6894.757293178 * Ind.spline(eff, rpm);
+  }
+  const sc = ind.supercharger;
+  if (sc) {
+    const maxBlower = Math.ceil(engine.maxRPM * sc.gearRatio);
+    const clutch = sc.clutchDisengageRPM ? Math.min(Math.max(-(rpm - sc.clutchDisengageRPM) / sc.clutchDisengageRange + 1, 0), 1) : 1;
+    const blower = rpm * sc.gearRatio * clutch, r = blower / maxBlower;
+    const shape = { roots: [-0.35, 1], screws: [0.3, 0.7], centrifugal: [0.6, 0.45] }[sc.type];
+    const psi = Math.max((shape[0] * r * r + shape[1]) * sc.pressurePSIPer1kRPM * 0.001 * blower, 0);
+    coef *= Math.max(1 + 0.0000087 * psi * 6894.757293178 - sc.crankLossPer1kRPM * 0.001 * blower, 0);
+  }
+  return base * mult * coef - (engine.friction + engine.dynamicFriction * rpm * Math.PI / 30);
+}
+
+const INDUCTION_DONOR = TURBO_DONOR
+  .replace('["bx_enginemounts", ["bx_enginemounts"], [], "bx_enginemounts", "Engine Mounts"]',
+    '["bx_enginemounts", ["bx_enginemounts"], [], "bx_enginemounts", "Engine Mounts"],\n    ["bx_intake_i4_large", ["bx_intake_i4_large"], [], "bx_intake_i4_large", "Intake"]')
+  .replace(/}\s*$/, `,
+"bx_intake_i4_large": {
+  "information": {"authors": "test", "name": "Stock intake", "value": 1},
+  "slotType": "bx_intake_i4_large",
+  "mainEngine": {"torqueModIntake": [["rpm", "torque"], [0, 0], [4000, 5]]},
+  "flexbodies": [["mesh", "[group]:", "nonFlexMaterials"], ["bx_airbox", ["bx_engine"]]],
+},
+}`);
+
+test("induction export: every layout makes the predicted torque in BeamNG", () => {
+  const base = { ...Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS, ...Gear.DEFAULT_GEARING }), name: "Boosted", compression: 9.5 };
+  const cases = [
+    { induction: "turbo", turboLayout: "single", boost: 12, spoolRpm: 3800 },
+    { induction: "turbo", turboLayout: "twin", boost: 12, spoolRpm: 3800 },
+    { induction: "turbo", turboLayout: "sequential", boost: 12, spoolRpm: 2600, handoverRpm: 4500 },
+    { induction: "turbo", turboLayout: "twinscroll", boost: 14, spoolRpm: 3500, compression: 10.5 }, // knocks
+    { induction: "supercharger", scType: "roots", boost: 8 },
+    { induction: "supercharger", scType: "screw", boost: 10 },
+    { induction: "supercharger", scType: "centrifugal", boost: 12, compression: 10.5 },
+    { induction: "twincharged", scType: "roots", turboLayout: "single", boost: 10, handoverRpm: 4000 },
+  ];
+  for (const c of cases) {
+    const d = { ...base, ...c };
+    const out = X.buildEngine(d, testProfile, INDUCTION_DONOR);
+    assert.equal(out.induction, "bx_intake_i4_large_crankcase_boosted");
+    const parts = parseJBeam(out.text);
+    const ind = parts[out.induction], me = parts[out.name].mainEngine;
+    assert.equal(ind.slotType, "bx_intake_i4_large");
+    assert.equal(ind.mainEngine.torqueModIntake, undefined);
+    assert.equal(!!ind.turbocharger, Ind.hasTurbo(d), c.induction);
+    assert.equal(!!ind.supercharger, Ind.hasSupercharger(d), c.induction);
+    assert.ok(ind.flexbodies.some((r) => Array.isArray(r) && r[0] === "crankcase_boosted_induction"));
+    assert.ok(out.dae.includes('name="crankcase_boosted_induction"') && out.dae.includes('name="crankcase_boosted_engine"'));
+    // the engine's own table is the same as without forced induction
+    const naOut = X.buildEngine({ ...d, induction: "none" }, testProfile, INDUCTION_DONOR);
+    assert.equal(naOut.induction, null);
+    assert.deepEqual(me.torque, parseJBeam(naOut.text)[naOut.name].mainEngine.torque);
+    assert.ok(me.maxTorqueRating >= E.analyse(d).peakTorque);
+    for (let rpm = 1500; rpm <= E.redline(d); rpm += 125) {
+      // exact on the 250 rpm grid; between points both sides interpolate their own way
+      const game = gameTorque(me, ind, rpm), want = E.brakeTorque(d, rpm);
+      assert.ok(Math.abs(game - want) < (rpm % 250 ? 0.025 * want + 2 : 1.5), `${c.induction}/${c.turboLayout ?? c.scType} at ${rpm}: game ${game.toFixed(1)}, Crankcase ${want.toFixed(1)}`);
+    }
+  }
+  // the config fits the part, at the design's boost
+  const d = { ...base, induction: "turbo", boost: 12, spoolRpm: 3800 };
+  const cfg = VC3.buildConfig(d, PROFILES.bx, BASE_PC);
+  const pc = JSON.parse(cfg.pc);
+  assert.equal(pc.parts.bx_intake_i4_large, "bx_intake_i4_large_crankcase_boosted");
+  assert.equal(pc.vars.$wastegateStart, 11.5);
+  assert.equal(JSON.parse(cfg.info)["Induction Type"], "Turbo");
+  assert.equal(JSON.parse(VC3.buildConfig({ ...d, induction: "supercharger" }, PROFILES.bx, BASE_PC).info)["Induction Type"], "Supercharger");
+});
+
+/* ---------- any car: profiles worked out from a car's own files ---------- */
+import * as Det from "../ui/lib/detect.js";
+import * as Frame from "../ui/lib/frame.js";
+
+// A made-up front-wheel-drive car with a transverse engine that lives in common/
+// and names its sides the other way round from the BX (no game data).
+const TC_COMMON = {
+  "vehicles/common/tc/tc_engine.jbeam": `{
+"tc_engine_i4": {
+  "information": {"name": "Test 1.6 I4"},
+  "slotType": "tc_engine",
+  "slots2": [["name", "allowTypes", "denyTypes", "default", "description"],
+    ["tc_intake", ["tc_intake"], [], "tc_intake_na", "Intake"],
+    ["tc_engine_internals", ["tc_engine_internals"], [], "", "Internals"],
+    ["tc_radiator", ["tc_radiator"], [], "tc_radiator", "Radiator"],
+    ["tc_transmission", ["tc_transmission"], [], "tc_transmission_6M", "Gearbox"]],
+  "mainEngine": {"torque": [["rpm", "torque"], [0, 0], [6000, 140]]},
+  "nodes": [["id", "posX", "posY", "posZ"], {"nodeWeight": 15},
+    ["e1r", 0.30, -1.60, 0.30], ["e1l", 0.30, -1.30, 0.30], ["e2r", -0.20, -1.60, 0.30], ["e2l", -0.20, -1.30, 0.30],
+    ["e3r", 0.30, -1.62, 0.75], ["e3l", 0.30, -1.28, 0.75], ["e4r", -0.20, -1.62, 0.75], ["e4l", -0.20, -1.28, 0.75]]
+},
+"tc_intake_na": {"information": {"name": "Stock intake"}, "slotType": "tc_intake", "mainEngine": {}},
+"tc_turbo": {"information": {"name": "Stage 1 Turbo"}, "slotType": "tc_intake", "turbocharger": {"wastegateStart": 8}},
+"tc_radiator": {"slotType": "tc_radiator", "nodes": [["id", "posX", "posY", "posZ"], ["rad1", 0.0, -1.95, 0.5], ["rad2", 0.3, -1.95, 0.5]]}
+}`,
+};
+const TC_FILES = {
+  "vehicles/tc/info.json": `{"Brand": "Testa", "Name": "vehiclesData.tc.Name", "default_pc": "base", "Type": "Car"}`,
+  "vehicles/tc/base.pc": `{"format": 2, "parts": {"tc_engine": "tc_engine_i4", "tc_differential_F": "tc_differential_F"}}`,
+  "vehicles/tc/info_base.json": `{"Weight": 1100, "Power": 110, "Top Speed": 52, "Drivetrain": "FWD"}`,
+  "vehicles/tc/tc.jbeam": `{
+"tc": {"slotType": "main", "slots2": [["name", "allowTypes", "denyTypes", "default", "description"],
+  ["tc_body", ["tc_body"], [], "tc_body", "Body"], ["tc_engine", ["tc_engine"], [], "tc_engine_i4", "Engine"],
+  ["tc_differential_F", ["tc_differential_F"], [], "tc_differential_F", "Front differential"]]},
+"tc_body": {"slotType": "tc_body", "nodes": [["id", "posX", "posY", "posZ"], ["hood1", 0.0, -1.45, 0.90], ["hood2", 0.4, -1.45, 0.92]]}
+}`,
+  "vehicles/tc/tc_drivetrain.jbeam": `{
+"tc_transmission_6M": {"slotType": "tc_transmission",
+  "slots2": [["name", "allowTypes", "denyTypes", "default", "description"], ["tc_flywheel", ["tc_flywheel"], [], "tc_flywheel", "Flywheel"]],
+  "powertrain": [["type", "name", "inputName", "inputIndex"], ["frictionClutch", "clutch", "mainEngine", 1], ["manualGearbox", "gearbox", "clutch", 1]]},
+"tc_transmission_6M_race": {"information": {"name": "Race 6-Speed"}, "slotType": "tc_transmission",
+  "slots2": [["name", "allowTypes", "denyTypes", "default", "description"], ["tc_flywheel", ["tc_flywheel"], [], "tc_flywheel", "Flywheel"]],
+  "variables": [["name", "type", "unit", "category", "default", "min", "max", "title", "description"],
+    ["$gear_1", "range", ":1", "Gears", 3.5, 0.5, 5], ["$gear_2", "range", ":1", "Gears", 2.1, 0.5, 5], ["$gear_3", "range", ":1", "Gears", 1.5, 0.5, 5],
+    ["$gear_4", "range", ":1", "Gears", 1.1, 0.5, 5], ["$gear_5", "range", ":1", "Gears", 0.9, 0.5, 5], ["$gear_6", "range", ":1", "Gears", 0.8, 0.5, 5]],
+  "powertrain": [["type", "name", "inputName", "inputIndex"], ["frictionClutch", "clutch", "mainEngine", 1], ["sequentialGearbox", "gearbox", "clutch", 1]]},
+"tc_differential_F": {"slotType": "tc_differential_F",
+  "slots2": [["name", "allowTypes", "denyTypes", "default", "description"], ["tc_finaldrive_F", ["tc_finaldrive_F"], [], "tc_finaldrive_F_4", "Final drive"]]},
+"tc_finaldrive_F_4": {"slotType": "tc_finaldrive_F"},
+"tc_finaldrive_F_race": {"slotType": "tc_finaldrive_F",
+  "variables": [["name", "type", "unit", "category", "default", "min", "max", "title", "description"], ["$finaldrive_F", "range", ":1", "Differentials", 4, 2, 6]]}
+}`,
+};
+
+test("a car's profile is worked out from its own files", () => {
+  const p = Det.detectProfile("tc", { files: TC_FILES }, Det.partIndex(TC_COMMON), { "vehiclesData.tc.Name": "Tester" });
+  assert.equal(p.support.ok, true);
+  assert.equal(p.name, "Testa Tester");
+  assert.equal(p.slotType, "tc_engine");
+  assert.equal(p.flywheelSlot, "tc_flywheel");
+  assert.equal(p.config.gearboxSlot, "tc_transmission");
+  assert.deepEqual(p.config.gearboxes[6], { part: "tc_transmission_6M_race", label: "Race 6-Speed", gears: 6, transmission: "Sequential" });
+  assert.deepEqual(p.config.finalDrives, [{ slot: "tc_finaldrive_F", part: "tc_finaldrive_F_race", var: "$finaldrive_F" }]);
+  assert.equal(p.config.drivetrain, "FWD");
+  assert.equal(p.car.mass, 1100);
+  const fam = p.families.inline;
+  assert.equal(fam.donorPart, "tc_engine_i4");
+  assert.equal(fam.donorMass, 120);
+  assert.equal(p.sources[fam.donorFile], "common");
+  assert.deepEqual(fam.drop, ["tc_engine_internals"]);
+  assert.equal(fam.intake.turboTemplate, "tc_turbo");
+  // crank along -x, its "l" nodes on the engine's right: transverse and swapped
+  assert.equal(fam.frame.orientation, "transverse");
+  assert.equal(fam.frame.swapped, true);
+  assert.deepEqual(fam.frame.origin, [0.3, -1.45, 0.3]);
+  // the bay: the stock engine plus room up to the hood and the radiator, less 3 cm
+  assert.equal(fam.bay.stock.front, 0.53);
+  assert.equal(fam.bay.top, 0.57);
+  assert.equal(p.familyFor.v, "inline");
+});
+
+test("an engine placed in a transverse car keeps the donor's frame", () => {
+  const p = Det.detectProfile("tc", { files: TC_FILES }, Det.partIndex(TC_COMMON), {});
+  const fam = p.families.inline;
+  const out = X.buildEngine(D, p, [TC_COMMON[fam.donorFile]]);
+  const part = parseJBeam(out.text)[out.name];
+  const nodes = part.nodes.filter((r) => Array.isArray(r) && /^e[1-4][rl]$/.test(r[0])).map((r) => ({ id: r[0], p: r.slice(1, 4) }));
+  const f = Det.engineFrame(nodes);
+  assert.deepEqual(f.forward.map((v) => Math.round(v)), [-1, 0, 0]);
+  assert.equal(f.swapped, true);
+  f.origin.forEach((v, i) => assert.ok(Math.abs(v - fam.frame.origin[i]) < 1e-3));
+  // the block reaches its own length towards the crank nose
+  const e2 = nodes.find((n) => n.id === "e2r").p;
+  assert.ok(Math.abs(0.3 - e2[0] - G.dimensions(D).length) < 1e-3);
+  // and the fit is judged in the engine's own frame
+  const fit = checkFit(D, p);
+  assert.match(fit.checks[0].text, /crank nose|out of bay/);
+  assert.equal(fit.frame.orientation, "transverse");
+});
+
+test("the BX's hand-written profile places engines exactly where it always did", () => {
+  for (const layout of ["inline", "v"]) {
+    const d = { ...D, layout, cylinders: layout === "v" ? 8 : 4 };
+    const fam = PROFILES.bx.families[PROFILES.bx.familyFor[layout]];
+    assert.deepEqual(Frame.placedBlockNodes(d, fam), G.blockNodes(d, fam.anchor));
+    const flat = (parts) => parts.flatMap((part) => part.quads.flat(2));
+    const a = flat(Frame.placedEngineParts(d, fam)), b = flat(engineParts(d, fam.anchor));
+    assert.equal(a.length, b.length);
+    a.forEach((v, i) => assert.ok(Math.abs(v - b[i]) < 1e-9));
+  }
+  assert.deepEqual(Frame.localBay(PROFILES.bx, PROFILES.bx.families.inline), { front: 0.69, halfWidth: 0.36, top: 0.53, bottom: -0.04 });
+});
+
+test("trucks that spell their block corners en1r ... get them spelt the same way", () => {
+  const spelt = Object.fromEntries(Object.entries(TC_COMMON).map(([k, v]) => [k, v.replace(/"e([1-4][rl])"/g, '"en$1"')]));
+  const p = Det.detectProfile("tc", { files: TC_FILES }, Det.partIndex(spelt), {});
+  assert.equal(p.support.ok, true);
+  const out = X.buildEngine(D, p, [spelt[p.families.inline.donorFile]]);
+  const ids = parseJBeam(out.text)[out.name].nodes.filter(Array.isArray).map((r) => r[0]);
+  for (const id of ["en1r", "en2l", "en3r", "en4l"]) assert.ok(ids.includes(id), id);
+  assert.ok(!ids.includes("e1r"));
+});
