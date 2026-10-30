@@ -12,6 +12,7 @@
 // Units: SI inside (m, m^3, Pa, J, N m, rad/s); mm, litres, kPa and kW at the edges.
 
 import { chargeFactor, superchargerLoss, turboFactor } from "./induction.js";
+import { exhaustFill, exhaustPumping } from "./exhaust.js";
 
 export const AIR_DENSITY = 1.18;        // kg/m^3, sea level at ~25 C
 export const FUEL_LHV = 44e6;           // J/kg, petrol lower heating value
@@ -39,6 +40,18 @@ export const FUELS = {
   "100":  { label: "100 race fuel", limit: 12.0 },
   "e85":  { label: "E85 ethanol", limit: 13.0 },
 };
+
+/**
+ * Fuel injection. Direct injection sprays the fuel into the cylinder late, where it
+ * evaporates and cools the charge: the mixture resists knock (worth roughly 1 to 1.5
+ * points of compression) and the cooler charge is a little denser. Its high-pressure
+ * pump is driven by the engine.
+ */
+export const INJECTION = {
+  port:   { label: "Port injection", knock: 1, fill: 1, pumpKpa: 0 },
+  direct: { label: "Direct injection", knock: 0.89, fill: 1.02, pumpKpa: 2 },
+};
+const injection = (d) => INJECTION[d.injection] ?? INJECTION.port;
 
 /** Highest redline the export supports (the BeamNG base table it scales ends at 9500 rpm). */
 export const MAX_REDLINE = 9000;
@@ -140,7 +153,8 @@ export function knockIndex(d, rpm) {
   // Boost counts for less than its air: the charge is intercooled and a boosted engine's
   // timing is mapped for it. With this, about 9:1 runs 10 psi on 91 and 8.5:1 runs 15 psi on 93.
   const boost = Math.pow(chargeFactor(d, rpm), 0.55);
-  return d.compression * Math.pow(ve, 0.9) * boost * Math.pow(d.bore / 86, 0.6) * Math.pow(2500 / Math.max(rpm, 1000), 0.12);
+  return d.compression * Math.pow(ve * exhaustFill(d, rpm), 0.9) * boost * Math.pow(d.bore / 86, 0.6) *
+    Math.pow(2500 / Math.max(rpm, 1000), 0.12) * injection(d).knock;
 }
 
 export function fuelLimit(d) {
@@ -155,10 +169,11 @@ export function knockLoss(d, rpm) {
 
 /**
  * How full the cylinder gets at full throttle, as a share of its swept volume at
- * ambient density: the VE, times whatever boost adds (see induction.js).
+ * ambient density: the VE, times whatever boost adds (see induction.js), what the
+ * exhaust takes or gives (exhaust.js), and direct injection's cooler charge.
  */
 export function cylinderFilling(d, rpm) {
-  return volumetricEfficiency(d, rpm) * chargeFactor(d, rpm);
+  return volumetricEfficiency(d, rpm) * chargeFactor(d, rpm) * exhaustFill(d, rpm) * injection(d).fill;
 }
 
 /** Indicated thermal efficiency from compression ratio (scaled Otto cycle). */
@@ -182,7 +197,7 @@ export function indicatedTorque(d, rpm) {
 export function frictionPressure(d, rpm) {
   const vp = pistonSpeed(d, rpm);
   const f = d.friction;
-  const c0 = 70 - 15 * f, c1 = 8 - 2 * f, c2 = 0.3 - 0.08 * f; // kPa, kPa/(m/s), kPa/(m/s)^2
+  const c0 = 70 - 15 * f + injection(d).pumpKpa, c1 = 8 - 2 * f, c2 = 0.3 - 0.08 * f; // kPa, kPa/(m/s), kPa/(m/s)^2
   return (c0 + c1 * vp + c2 * vp * vp) * 1000;
 }
 
@@ -193,7 +208,7 @@ export function frictionTorque(d, rpm) {
 
 /** Torque at the flywheel, N m. */
 export function brakeTorque(d, rpm) {
-  return indicatedTorque(d, rpm) - frictionTorque(d, rpm) - superchargerDrive(d, rpm);
+  return indicatedTorque(d, rpm) - frictionTorque(d, rpm) - superchargerDrive(d, rpm) - exhaustPumping(d, rpm);
 }
 
 /**

@@ -25,7 +25,14 @@
     "scType": "roots",
     "boost": 5,
     "spoolRpm": 3200,
-    "handoverRpm": 4500
+    "handoverRpm": 4500,
+    "injection": "port",
+    "manifold": "cast",
+    "primary": 80,
+    "pipes": "single",
+    "pipe": 51,
+    "cat": "standard",
+    "muffler": "turbo"
   },
   "gearing": {
     "gears": [
@@ -41,10 +48,10 @@
   },
   "summary": {
     "engine": "I4 1.33 L",
-    "peakPowerKw": 97,
+    "peakPowerKw": 92,
     "peakPowerRpm": 6100,
-    "peakTorqueNm": 163,
-    "peakTorqueRpm": 4800,
+    "peakTorqueNm": 157,
+    "peakTorqueRpm": 4250,
     "redline": 7350,
     "massKg": 123
   }

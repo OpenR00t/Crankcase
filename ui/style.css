@@ -21,6 +21,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; background: var(--bg0); color: var(--fg1);
   font: 13px/1.45 var(--font-mono); -webkit-font-smoothing: antialiased; }
 button, input, select { font: inherit; color: inherit; }
@@ -250,3 +251,25 @@ aside.side { background: var(--bg-h); border-right: 1px solid var(--bg1); displa
 .tools .tmsg.err { color: var(--red); }
 
 header.top .btn.small { white-space: nowrap; }
+
+/* ---------- design locks ---------- */
+.locks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: -4px; }
+.locks .hd { font-size: 11px; color: var(--gray); letter-spacing: .1em; text-transform: uppercase; margin-right: 4px; }
+.lock { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  background: var(--bg0-s); border: 1px solid var(--bg1); color: var(--fg4); font-size: 12px; user-select: none; }
+.lock:hover { border-color: var(--bg3); color: var(--fg2); }
+.lock svg { width: 11px; height: 12px; flex: none; }
+.lock .lv { color: var(--fg3); font-variant-numeric: tabular-nums; }
+.lock.on { border-color: var(--aqua-d); color: var(--fg1); background: color-mix(in srgb, var(--aqua) 10%, var(--bg0-s)); }
+.lock.on svg { color: var(--aqua); }
+.lock.on .lv { color: var(--fg0); border-bottom: 1px dotted var(--bg4); cursor: text; }
+.lock.unmet { border-color: var(--red); }
+.lock.unmet svg { color: var(--red); }
+.lock.held { animation: held .6s ease-out; }
+@keyframes held { 0% { border-color: var(--yellow); box-shadow: 0 0 0 3px color-mix(in srgb, var(--yellow) 35%, transparent); }
+  100% { box-shadow: 0 0 0 0 transparent; } }
+.lock input { width: 70px; background: var(--bg-h); border: 1px solid var(--bg3); border-radius: 4px; padding: 0 4px; font-size: 12px; }
+.locks .lmsg { font-size: 12px; color: var(--yellow); }
+.locks .lmsg.ok { color: var(--aqua); }
+.stat .pad { width: 10px; height: 11px; color: var(--aqua); margin-left: 5px; vertical-align: -1px; }
+.ctl input[type=range].held::-webkit-slider-thumb { background: var(--yellow); }

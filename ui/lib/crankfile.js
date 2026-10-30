@@ -9,6 +9,7 @@
 //   "engine":  { layout, cylinders, bore, stroke, build, compression, fuel,
 //                duration, lift, runner, rings, bearings, oil, sump, flywheel, crank },
 //   "gearing": { gears: [...], finalDrive, tire },
+//   "locks":   { displacement: 2.0, redline: 7000, ... }   // design locks, if any
 //   "summary": { ... }   // written for reading; ignored when opening
 // }
 //
@@ -18,6 +19,7 @@ import { DEFAULT_DESIGN, analyse } from "./engine.js";
 import { DEFAULT_PARTS, resolve, migrate } from "./parts.js";
 import { DEFAULT_GEARING, SHIFT_STYLES } from "./gearing.js";
 import { layoutName, mass } from "./geometry.js";
+import { LOCKS } from "./locks.js";
 
 export const FORMAT = "crankcase";
 export const VERSION = 1;
@@ -25,7 +27,8 @@ export const EXTENSION = "crank";
 
 const ENGINE_KEYS = ["layout", "cylinders", "bore", "stroke", "build", "compression", "fuel",
   "duration", "lift", "runner", "rings", "bearings", "oil", "sump", "flywheel", "crank",
-  "induction", "turboLayout", "scType", "boost", "spoolRpm", "handoverRpm"];
+  "induction", "turboLayout", "scType", "boost", "spoolRpm", "handoverRpm", "injection",
+  "manifold", "primary", "pipes", "pipe", "cat", "muffler"];
 
 /** The file text for a design. */
 export function toCrank(d) {
@@ -38,6 +41,7 @@ export function toCrank(d) {
     notes: d.notes || "",
     engine: Object.fromEntries(ENGINE_KEYS.map((k) => [k, d[k]])),
     gearing: { gears, finalDrive: d.finalDrive, tire: d.tire, shift: d.shift },
+    ...(d.locks && Object.keys(d.locks).length ? { locks: d.locks } : {}),
     summary: {
       engine: `${layoutName(d)} ${a.litres.toFixed(2)} L`,
       peakPowerKw: Math.round(a.peakPower), peakPowerRpm: a.peakPowerRpm,
@@ -71,5 +75,8 @@ export function fromCrank(text) {
   if (typeof gearing.shift === "string" && SHIFT_STYLES[gearing.shift]) d.shift = gearing.shift;
   d.name = typeof file.name === "string" && file.name.trim() ? file.name.trim() : "Untitled";
   d.notes = typeof file.notes === "string" ? file.notes : "";
+  if (file.locks && typeof file.locks === "object") {
+    d.locks = Object.fromEntries(Object.entries(file.locks).filter(([k, v]) => LOCKS[k] && (typeof v === "number" || v === true)));
+  }
   return resolve(engine.duration == null && d.cam != null ? migrate(d) : d);
 }

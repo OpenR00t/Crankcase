@@ -200,6 +200,34 @@ function gearboxPoint(look, engineName) {
   return null;
 }
 
+/**
+ * The exhaust slot under an engine: on the engine itself or a few levels down (many cars
+ * hang it off the intake's headers). The slot whose parts carry torqueModExhaust wins;
+ * failing that, an exhaust slot (not the manifold) with a default part. The template is
+ * that slot's default part.
+ */
+function exhaustSlot(look, engineName) {
+  const found = [];
+  const seen = new Set();
+  const walk = (name, depth) => {
+    if (depth > 3 || !name || seen.has(name)) return;
+    seen.add(name);
+    for (const s of slotsOf(look.part(name))) {
+      const type = s.types[0] ?? s.name;
+      if (/exhaust/i.test(type) && !/manifold|header/i.test(type)) {
+        const candidates = [s.default, ...look.inSlot(type).sort()].filter((n) => n && look.part(n));
+        const withMod = candidates.find((n) => look.part(n).mainEngine?.torqueModExhaust);
+        if (withMod || candidates.length) found.push({ slot: type, template: withMod ?? candidates[0], depth, mod: !!withMod });
+      }
+      if (s.default) walk(s.default, depth + 1);
+    }
+  };
+  walk(engineName, 0);
+  found.sort((a, b) => (b.mod - a.mod) || (a.depth - b.depth));
+  const best = found[0];
+  return best ? { slot: best.slot, template: best.template, file: look.fileOf(best.template) } : null;
+}
+
 /** A point from the car into the canonical engine frame. */
 export function toEngine(frame, q) {
   const d = sub(q, frame.origin);
@@ -403,6 +431,15 @@ export function detectProfile(id, bundle, common, names = {}) {
     }
   }
 
+  // an exhaust hung off the body rather than the engine: anywhere in the stock config
+  let carExhaust = null;
+  for (const [type, chosen] of used.slots) {
+    if (!/exhaust/i.test(type) || /manifold|header/i.test(type)) continue;
+    const candidates = [chosen, ...look.inSlot(type).sort()].filter((n) => n && n !== "none" && look.part(n));
+    const template = candidates.find((n) => look.part(n).mainEngine?.torqueModExhaust);
+    if (template) { carExhaust = { slot: type, template, file: look.fileOf(template) }; break; }
+  }
+
   // one donor per family: the default engine for its own family, otherwise the first of that family
   const byFamily = {};
   const diesel = (n) => /diesel/i.test(n) || look.part(n)?.mainEngine?.requiredEnergyType === "diesel";
@@ -440,6 +477,8 @@ export function detectProfile(id, bundle, common, names = {}) {
       intake.files = [...new Set([template, intake.defaultIntake].filter(Boolean).map((n) => look.fileOf(n)).filter((f) => f && f !== look.fileOf(donor)))];
       for (const n of [template, intake.defaultIntake]) if (n && look.fileOf(n)) sources[look.fileOf(n)] = look.source(n);
     }
+    const exhaust = exhaustSlot(look, donor) ?? carExhaust;
+    if (exhaust) sources[exhaust.file] = look.source(exhaust.template);
     const donorFile = look.fileOf(donor);
     sources[donorFile] = look.source(donor);
     const anchor = { x: frame.origin[0], y: frame.origin[1], z: frame.origin[2] };
@@ -454,6 +493,7 @@ export function detectProfile(id, bundle, common, names = {}) {
         .map((e) => look.part(e))), obstacles.map((q) => toEngine(frame, q)), radiators.map((q) => toEngine(frame, q))),
       drop,
       intake,
+      exhaust,
     };
   }
   if (!Object.keys(families).length) return fail("couldn't work out which way its engines point");
@@ -485,6 +525,7 @@ export function detectProfile(id, bundle, common, names = {}) {
   const place = where ? `${where} engine, ${along}` : `${along} engine`;
   const layoutNote = `${place}, ${car.drivetrain.toLowerCase().replace("wd", "-wheel drive").replace("r-", "rear-").replace("f-", "front-").replace("a-", "all-")}`;
 
+  if (!Object.values(families).some((f) => f.exhaust)) notes.push("no exhaust slot found: the car keeps its own exhaust");
   if (!flywheelSlot) notes.push("no flywheel slot: the design's flywheel mass is left out");
   if (!Object.keys(gearboxes).length) notes.push("no adjustable gearbox: export keeps the car's own gearing");
   if (!drives.length) notes.push("no adjustable final drive");

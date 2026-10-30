@@ -1,8 +1,8 @@
 # Crankcase
 
 An engine generator for [BeamNG.drive](https://www.beamng.com/). Build an engine from its
-physical parts (layout, bore and stroke, cams, intake, internals, compression and fuel,
-turbo, flywheel) and gearing, and Crankcase works out its torque curve, size, mass and rotating
+physical parts (layout, bore and stroke, cams, intake, internals, compression, fuel and
+injection, turbo or supercharger, exhaust, flywheel) and gearing, and Crankcase works out its torque curve, size, mass and rotating
 inertia from them. Export it and the game gets a complete engine: torque table, friction and
 engine braking, its own 3D model, sound, mounts, flywheel, and a vehicle config with the
 gearing set.
@@ -17,17 +17,25 @@ it does to the result.
 | 1. Displacement | Cylinders, bore, stroke, rotating-assembly build | Swept volume, bore/stroke ratio, mean piston speed and the redline it allows |
 | 2. Breathing | Cam duration and lift, intake runner length | Volumetric efficiency vs rpm (where the torque curve's shape comes from), and the valve-lift diagram with the overlap |
 | 3. Internals | Piston rings, bearings, oil, wet or dry sump | Combustion torque, friction losses and what reaches the flywheel; what each part saves and costs in durability |
-| 4. Compression | Compression ratio, fuel octane | Efficiency gained from compression, and knock: where the mixture would detonate and the torque lost when the ECU retards the timing |
+| 4. Compression | Compression ratio, fuel octane, port or direct injection | Efficiency gained from compression, and knock: where the mixture would detonate and the torque lost when the ECU retards the timing; with direct injection, the compression it would take clean |
 | 5. Forced induction | Naturally aspirated, turbocharged (single, parallel twin, sequential twin, twin-scroll), supercharged (roots, twin-screw, centrifugal) or twincharged; boost; where full boost arrives (the turbo's size); the hand-over rpm for sequential turbos and twincharging | Boost against rpm (each device's share when twincharged), torque with and without it, how fast the boost builds, the supercharger's drive loss, and knock under boost with the compression that would run clean |
-| 6. Gearing | Number of gears, each ratio, final drive, tyre size; ratio tools to spread the middle gears evenly or progressively, set a gear from an rpm at a speed, and move ratio between gearbox and final drive | Force at the wheels in every gear against the ideal constant-power line and the car's drag and rolling resistance; top speed and what limits it, where each upshift lands on the power curve, the best shift point for each gear (where the next gear accelerates harder, counting grip and engine inertia), cruising rpm and an estimated 0–100 km/h |
-| 7. Rotating mass | Flywheel (dual-mass, stock, lightened, ultra-light), crank (fully counterweighted or lightened), the driver's shift speed (relaxed, brisk, quick, sequential) | Total rotating inertia and its parts; how fast the engine revs up in neutral and how far the revs fall during a shift against where the next gear wants them, and how long a perfectly matched shift would take; how heavy that inertia feels through each gear, and its effect on 0–100 km/h |
-
-Planned: direct injection, and modelling the exhaust.
+| 6. Exhaust | Cast manifold or tubular headers (and their primary length), single or dual pipes and their diameter, catalytic converter, muffler | Back pressure against rpm, torque with this exhaust against a free-flowing one, the pipe size the engine wants, the rpm the headers are tuned to, and how loud it is in the game |
+| 7. Gearing | Number of gears, each ratio, final drive, tyre size; ratio tools to spread the middle gears evenly or progressively, set a gear from an rpm at a speed, and move ratio between gearbox and final drive | Force at the wheels in every gear against the ideal constant-power line and the car's drag and rolling resistance; top speed and what limits it, where each upshift lands on the power curve, the best shift point for each gear (where the next gear accelerates harder, counting grip and engine inertia), cruising rpm and an estimated 0–100 km/h |
+| 8. Rotating mass | Flywheel (dual-mass, stock, lightened, ultra-light), crank (fully counterweighted or lightened), the driver's shift speed (relaxed, brisk, quick, sequential) | Total rotating inertia and its parts; how fast the engine revs up in neutral and how far the revs fall during a shift against where the next gear wants them, and how long a perfectly matched shift would take; how heavy that inertia feels through each gear, and its effect on 0–100 km/h |
 
 The parts map onto the model in [`ui/lib/parts.js`](ui/lib/parts.js). Every change is drawn against a **baseline** (dashed). *Pin as baseline* keeps the current
 design to compare the next change against. Hovering any chart shows its values at the cursor;
 clicking pins that readout so it stays (and updates) while you move sliders. Click a slider's
 value to type one in.
+
+**Locks** under the headline numbers hold a target while you design. *Displacement*, *Redline*
+and *Bore / stroke* hold a value: with 2.0 L locked, more bore means less stroke; with the redline
+locked, the stroke follows the rotating-assembly build. *Mass* is a ceiling, and *Fits the car*
+and *No knock* are limits: the sliders stop at the last setting that keeps them (turning *No knock*
+on while the engine knocks lowers the compression until it runs clean). Click a lock's value to
+type a target, such as 2.0 for a 2.0 L class. A move the locks can't allow (the bore, with both
+displacement and redline locked) is held, and the lock that held it flashes. Locks are saved with
+the design ([`ui/lib/locks.js`](ui/lib/locks.js)).
 
 Under the controls, each section shows its key **figures**, then **notes** on what's worth acting on,
 one line each and most urgent first (red: critical, yellow: warning, blue: information); hover a
@@ -43,10 +51,22 @@ textbook relationship that can be followed by hand.
   (a scaled Otto-cycle efficiency from the compression ratio)
 - Torque = work per cycle ÷ 4π (four-stroke: one cycle every two revolutions)
 - Flywheel torque = indicated torque − friction (friction mean effective pressure growing
-  with piston speed, after Chen and Flynn)
+  with piston speed, after Chen and Flynn) − exhaust pumping
 
 Knock is a single index that rises with compression ratio, cylinder filling (VE), bore size and low rpm;
 above the chosen fuel's limit, torque is reduced as an ECU would by retarding the ignition.
+Direct injection cools the charge: it lowers the knock index (worth about 1 to 1.5 points of
+compression) and fills the cylinder about 2% better, for a little pump friction.
+
+The exhaust ([`ui/lib/exhaust.js`](ui/lib/exhaust.js)): back pressure = loss coefficient ×
+½ × gas density × gas speed², with each part (manifold, pipe friction, catalytic converter,
+muffler) adding to the coefficient and the gas flow following the engine's airflow. It costs
+pumping work on the exhaust stroke and leaves residual gas in the cylinder (more with cam
+overlap). Behind a turbo the gas is denser and the pressure is felt back through the turbine.
+Tubular headers add a tuning bump around the rpm their primary length suits (Smith's rule);
+an oversized pipe loses a little scavenging low down. A design saved before the Exhaust section
+opens with a road car's exhaust, so it shows a little less than it did; that's about what the
+game's stock exhausts were already taking off.
 
 Volumetric efficiency combines a cam term (best at the cam's rpm, a bigger cam peaks higher
 but falls off harder at low rpm), an intake-tuning bump, and flow choking at high piston
@@ -163,9 +183,16 @@ sums the game uses ([`ui/lib/induction.js`](ui/lib/induction.js)). BeamNG doesn'
 so the part carries the difference: the turbo's efficiency where it boosts, and a torque
 multiplier where the supercharger does. The engine's torque rating is sized for the boosted torque.
 
+The design's **exhaust** is a part for the car's exhaust slot, built on the stock exhaust (its
+pipes, nodes and look): its `torqueModExhaust` is what the exhaust takes from, or with tuned
+headers adds to, the naturally aspirated torque, and the game adds it to the engine's table
+before any boost multiplies it, as it does with its own exhausts. The engine's table itself is
+free-flowing. The muffler and catalytic converter set the tailpipe's muffling, tone and
+backfires. A car whose exhaust slot can't be found keeps its own exhaust, and the export says so.
+
 It also writes a **vehicle config** for the car (`crankcase_<name>.pc` with its
 `info_crankcase_<name>.json`), so the design's gearing comes along: a stock config of the
-car (read from the game) with your engine, flywheel and any turbo, the car's adjustable race gearbox for your number
+car (read from the game) with your engine, exhaust, flywheel and any turbo, the car's adjustable race gearbox for your number
 of gears and its adjustable final drives swapped in, and every ratio set (a car with no adjustable
 gearbox keeps its own). It appears in the
 vehicle selector as *Crankcase: your design*. Everything else, tyres included, stays as the

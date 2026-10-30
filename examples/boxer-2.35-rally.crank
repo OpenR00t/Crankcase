@@ -19,7 +19,20 @@
     "oil": "5w30",
     "sump": "dry",
     "flywheel": "ultra",
-    "crank": "lightened"
+    "crank": "lightened",
+    "induction": "none",
+    "turboLayout": "single",
+    "scType": "roots",
+    "boost": 10,
+    "spoolRpm": 3500,
+    "handoverRpm": 4500,
+    "injection": "port",
+    "manifold": "headers",
+    "primary": 72,
+    "pipes": "single",
+    "pipe": 63,
+    "cat": "none",
+    "muffler": "straight"
   },
   "gearing": {
     "gears": [
@@ -35,10 +48,10 @@
   },
   "summary": {
     "engine": "Flat-4 2.35 L",
-    "peakPowerKw": 160,
+    "peakPowerKw": 168,
     "peakPowerRpm": 7300,
     "peakTorqueNm": 262,
-    "peakTorqueRpm": 5200,
+    "peakTorqueRpm": 5650,
     "redline": 8950,
     "massKg": 158
   }

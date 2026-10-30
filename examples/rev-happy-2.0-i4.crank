@@ -19,7 +19,20 @@
     "oil": "5w30",
     "sump": "wet",
     "flywheel": "stock",
-    "crank": "full"
+    "crank": "full",
+    "induction": "none",
+    "turboLayout": "single",
+    "scType": "roots",
+    "boost": 10,
+    "spoolRpm": 3500,
+    "handoverRpm": 4500,
+    "injection": "port",
+    "manifold": "headers",
+    "primary": 74,
+    "pipes": "single",
+    "pipe": 60,
+    "cat": "highflow",
+    "muffler": "turbo"
   },
   "gearing": {
     "gears": [
@@ -35,10 +48,10 @@
   },
   "summary": {
     "engine": "I4 2.00 L",
-    "peakPowerKw": 163,
+    "peakPowerKw": 167,
     "peakPowerRpm": 7650,
-    "peakTorqueNm": 217,
-    "peakTorqueRpm": 6450,
+    "peakTorqueNm": 220,
+    "peakTorqueRpm": 6600,
     "redline": 8350,
     "massKg": 142
   }

@@ -12,11 +12,14 @@
 //   background(d, a, ctx)  how it works: reference text that doesn't change
 //                          with the design's verdicts, folded away by default
 
-import { BUILDS, FUELS, indicatedEfficiency, valveFlow, frictionTorque, redline } from "./engine.js";
+import { BUILDS, FUELS, INJECTION, indicatedEfficiency, valveFlow, frictionTorque, redline, knockIndex, fuelLimit } from "./engine.js";
+import { MANIFOLDS, CATS, MUFFLERS, PIPES, PIPE_LIMITS, PRIMARY_LIMITS, PIPE_SPEED, backPressure, headerTunedRpm, recommendedPipe,
+  freeFlowing } from "./exhaust.js";
 import { CAM, INTERNALS, overlap, tunedRpm, springFriction, durability, resolve } from "./parts.js";
 import { TIRES, analyseGearing, ratios, tireRadius, SHIFT_STYLES, shiftTime } from "./gearing.js";
 import { FLYWHEELS, CRANKS, crankInertia, flywheelInertia, totalInertia, revUp, dropIn, matchTime, equivalentMass, closedThrottleDrag, pumpingTorque } from "./rotating.js";
 import { LAYOUTS, vAngle, layoutName } from "./geometry.js";
+import { GEOMETRY } from "./locks.js";
 import { INDUCTIONS, TURBO_LAYOUTS, SUPERCHARGERS, turboSpec, steadyBoost, boostEfficiency, fullBoostRpm, boostRiseTime,
   naturallyAspirated, hasTurbo, hasSupercharger, superchargerLoss, turboFactor, inductionLabel } from "./induction.js";
 import { analyse as analyseEngine, superchargerDrive } from "./engine.js";
@@ -69,8 +72,8 @@ export const SECTIONS = [
         options: Object.entries(LAYOUTS).map(([k, l]) => [k, l.label]) },
       { key: "cylinders", label: "Cylinders", type: "choice",
         options: (d) => LAYOUTS[d.layout].counts.map((n) => [n, String(n)]) },
-      { key: "bore", label: "Bore", unit: "mm", type: "range", min: 70, max: 105, step: 0.5 },
-      { key: "stroke", label: "Stroke", unit: "mm", type: "range", min: 60, max: 110, step: 0.5 },
+      { key: "bore", label: "Bore", unit: "mm", type: "range", min: GEOMETRY.bore.min, max: GEOMETRY.bore.max, step: 0.5, fmt: (v) => `${+v.toFixed(1)} mm` },
+      { key: "stroke", label: "Stroke", unit: "mm", type: "range", min: GEOMETRY.stroke.min, max: GEOMETRY.stroke.max, step: 0.5, fmt: (v) => `${+v.toFixed(1)} mm` },
       { key: "build", label: "Rotating assembly", type: "choice",
         options: Object.entries(BUILDS).map(([k, b]) => [k, `${b.label} (${b.maxPistonSpeed} m/s)`]) },
     ],
@@ -257,6 +260,7 @@ export const SECTIONS = [
     controls: [
       { key: "compression", label: "Compression ratio", type: "range", min: 7, max: 14, step: 0.1, fmt: (v) => `${v.toFixed(1)}:1` },
       { key: "fuel", label: "Fuel", type: "choice", options: Object.entries(FUELS).map(([k, f]) => [k, f.label]) },
+      { key: "injection", label: "Fuel injection", type: "choice", options: Object.entries(INJECTION).map(([k, f]) => [k, f.label]) },
     ],
     figures(d, a) {
       const eff = indicatedEfficiency(d), ref = indicatedEfficiency({ ...d, compression: 10.5 });
@@ -284,6 +288,17 @@ export const SECTIONS = [
         out.push(info("Room for more compression",
           `${(margin * 100).toFixed(0)}% knock margin on ${FUELS[d.fuel].label}: more compression would add torque everywhere.`));
       }
+      if (d.injection === "direct") {
+        const port = { ...d, injection: "port" };
+        const worstPort = Math.max(...a.rpm.map((r) => knockIndex(port, r)));
+        const crPort = d.compression * fuelLimit(d) / worstPort, crDi = d.compression * a.knockLimit / worst;
+        out.push(info(`Direct injection: clean up to ${f1(crDi)}:1 here, against ${f1(crPort)}:1 with port injection`,
+          "The fuel evaporates inside the cylinder and cools the charge, so the mixture resists knock and the cylinder fills a " +
+          "little better. Its high-pressure pump costs a little friction."));
+      } else if (knocking.length) {
+        out.push(info("Direct injection would take about 1 to 1.5 points more compression before knocking",
+          "Pick it under Fuel injection: the cooler charge resists knock, which is how modern turbo engines run 10:1 on pump fuel."));
+      }
       if (d.bore > 90) {
         out.push(info(`${d.bore} mm bores: +${((Math.pow(d.bore / 86, 0.6) - 1) * 100).toFixed(0)}% knock tendency`,
           "The flame takes longer to cross a wide cylinder, giving the far side time to go off. That's one reason big-bore engines run lower compression."));
@@ -294,6 +309,10 @@ export const SECTIONS = [
       return [
         "Typical ratios: road engines on regular fuel 9.5 to 10.5:1, modern direct-injection engines on premium 11 to 13:1, " +
         "race engines on race fuel 13:1 and up.",
+        "<b>Direct injection</b> sprays the fuel straight into the cylinder late in the cycle. As it evaporates it cools the " +
+        "charge: the mixture resists knock (about 1 to 1.5 points of compression's worth here) and the cylinder fills about 2% better. " +
+        "Port injection sprays into the intake port, where the fuel evaporates before it gets in. BeamNG has no injection " +
+        "model, so the export carries it in the torque table and, with a turbo, in the boost's efficiency.",
         "Ethanol (E85) resists knock very well, but Crankcase doesn't yet model the extra fuel it needs.",
       ];
     },
@@ -440,11 +459,101 @@ export const SECTIONS = [
         "for its pipework, intercooler, nodes and sounds, with the design's own turbos or blower as its model; the exported config fits it. " +
         (hasTurbo(d) ? "The boost stays adjustable on the in-game slider. " : "") +
         "Knock at the design's boost is built into the part, so the game makes the torque shown here (BeamNG has no knock).",
-        "<b>Exhaust</b>: these numbers are with a free-flowing exhaust. The car's own exhaust part takes a little torque off, and " +
-        "BeamNG applies the boost after that, so with boost it costs several times as much (the BX's stock exhaust: about " +
-        "−10 N·m at 5,000 rpm and −21 at 8,000 before boost, so about −27 and −57 at 30 psi). Pick the exhaust in the game.",
+        "<b>Exhaust</b>: these numbers include the exhaust set in the Exhaust section. After a turbo, the same pipe costs more: " +
+        "the gas flow is bigger and the pressure in the pipe is felt back through the turbine.",
       );
       return out;
+    },
+  },
+  {
+    id: "exhaust",
+    title: "Exhaust",
+    tagline: "Getting the gas out: back pressure and tuned headers",
+    intro:
+      "Every gram of air that goes in has to come out as exhaust, and the exhaust system resists it. The pressure it " +
+      "takes to push the gas out, the <b>back pressure</b>, grows with the square of the gas speed, so it costs " +
+      "little low down and a lot near redline, and far more with boost. The piston pays it on every exhaust stroke, and " +
+      "the gas it leaves behind takes room the fresh charge would have had. <b>Tubular headers</b> do the opposite " +
+      "around one rpm: each pulse's echo arrives as suction just as the valves overlap and helps empty the cylinder.",
+    controls: [
+      { key: "manifold", label: "Manifold", type: "choice", relayout: true, options: Object.entries(MANIFOLDS).map(([k, m]) => [k, m.label]) },
+      { key: "primary", label: "Header primary length", type: "range", min: PRIMARY_LIMITS.min, max: PRIMARY_LIMITS.max, step: 1,
+        fmt: (v, d) => `${v} cm → ${f0(headerTunedRpm({ ...d, primary: v }))} rpm`, show: (d) => d.manifold === "headers" },
+      { key: "pipes", label: "Pipes", type: "choice", options: Object.entries(PIPES).map(([k, p]) => [k, p.label]) },
+      { key: "pipe", label: "Pipe diameter", type: "range", min: PIPE_LIMITS.min, max: PIPE_LIMITS.max, step: 1,
+        fmt: (v) => `${v} mm (${(v / 25.4).toFixed(2)}")` },
+      { key: "cat", label: "Catalytic converter", type: "choice", options: Object.entries(CATS).map(([k, c]) => [k, c.label]) },
+      { key: "muffler", label: "Muffler", type: "choice", options: Object.entries(MUFFLERS).map(([k, m]) => [k, m.label]) },
+    ],
+    figures(d, a) {
+      const free = analyseEngine(freeFlowing(d), 100);
+      const pr = a.peakPowerRpm, red = a.redline;
+      const bp = backPressure(d, pr), bpRed = backPressure(d, red);
+      const rec = recommendedPipe(d);
+      const out = [
+        fig("Back pressure", `${f1(bp / 1000)} kPa @ ${f0(pr)} · ${f1(bpRed / 1000)} @ redline`,
+          `${f1(bp / 6894.76)} psi at peak power. Stock road cars run about 15 to 30 kPa at peak power; race exhausts under 10.`,
+          bp > 45e3 ? "crit" : bp > 30e3 ? "warn" : null),
+        fig("Peak power", `${f0(a.peakPower)} kW · ${a.peakPower >= free.peakPower ? "+" : "−"}${f1(Math.abs(a.peakPower / free.peakPower - 1) * 100)}%`,
+          `Against a free-flowing exhaust (${f0(free.peakPower)} kW): what this exhaust costs or, with tuned headers, gives`),
+        fig("Pipe for this engine", `${rec} mm (${(rec / 25.4).toFixed(2)}")${PIPES[d.pipes].count > 1 ? " each" : ""}`,
+          `Keeps the gas at about ${PIPE_SPEED} m/s at redline. Yours: ${d.pipe} mm.`,
+          d.pipe < rec * 0.85 ? "warn" : null),
+      ];
+      if (d.manifold === "headers") {
+        out.push(fig("Headers tuned to", `${f0(headerTunedRpm(d))} rpm`, `${d.primary} cm primaries with a ${d.duration}° cam (Smith's rule: 850 × exhaust duration ÷ length in inches + 3)`));
+      }
+      out.push(fig("Sound", { chambered: "quiet", turbo: "moderate", straight: "loud", none: "very loud" }[d.muffler] + (d.cat === "none" ? ", pops on overrun" : ""),
+        "In the game: how much the muffler damps the tailpipe, and how often it backfires on the overrun."));
+      return out;
+    },
+    notes(d, a) {
+      const out = [];
+      const free = analyseEngine(freeFlowing(d), 100);
+      const loss = 1 - a.peakPower / free.peakPower;
+      const rec = recommendedPipe(d);
+      if (loss > 0.08) {
+        out.push(crit(`The exhaust costs ${pct(loss)} of the power`,
+          `Back pressure reaches ${f1(backPressure(d, a.redline) / 1000)} kPa at redline. ` +
+          (d.pipe < rec ? `A ${rec} mm pipe${PIPES[d.pipes].count > 1 ? " pair" : ""} would suit this engine` : "A freer muffler or cat would help") +
+          (d.layout === "v" && d.pipes === "single" ? "; a V engine usually runs one pipe per bank." : ".")));
+      } else if (loss > 0.03) {
+        out.push(warn(`The exhaust costs ${pct(loss)} of the power`, "Normal for a quiet road exhaust. A bigger pipe or a freer muffler gets some back."));
+      }
+      if (d.pipe > rec * 1.3) {
+        out.push(info(`Pipe oversized for this engine (${d.pipe} mm vs ${rec} mm)`,
+          "The gas slows down in a pipe that big and loses some of the scavenging low down: a little low-rpm torque for no gain at the top."));
+      }
+      if (d.manifold === "headers") {
+        const t = headerTunedRpm(d);
+        if (t > a.redline) out.push(warn(`Headers tuned above the redline (${f0(t)} rpm)`, "Longer primaries bring the tuning down into the rev range."));
+        else out.push(info(`Headers help most around ${f0(t)} rpm`, "Longer primaries tune lower, shorter ones higher, like intake runners. With the runners and cam near the same rpm the peak gets sharper."));
+        if (hasTurbo(d)) out.push(info("A turbo blunts the headers' tuning",
+          "The turbine sits in the way of the pulses. " + (d.turboLayout === "twinscroll" ? "Twin-scroll keeps the pulses apart, so it keeps half of it." : "Twin-scroll would keep more of it.")));
+      }
+      if (hasTurbo(d) && d.pipe < rec) {
+        out.push(info("After a turbo, a small pipe costs about twice as much",
+          "The pressure in the pipe is felt back through the turbine. Turbo cars usually run 3 inch (76 mm) or more from the turbine back."));
+      }
+      if (d.cat === "none") out.push(info("No catalytic converter: not road legal", "Fine for a race car; it pops and bangs on the overrun in the game."));
+      return out;
+    },
+    background(d, a, ctx) {
+      const fam = familyFor(ctx?.profile ?? PROFILES[DEFAULT_PROFILE], d.layout);
+      return [
+        "<b>Back pressure</b> = loss coefficient × ½ × gas density × gas speed². Each part adds to the loss coefficient: " +
+        `${Object.values(MANIFOLDS).map((m) => `${m.label.toLowerCase()} ${m.zeta}`).join(", ")}; ` +
+        `${Object.values(CATS).map((c) => `${c.label.toLowerCase()} ${c.zeta}`).join(", ")}; ` +
+        `mufflers from ${MUFFLERS.chambered.zeta} (chambered) to 0; and the pipe's own friction (about 1 for 3 m of 2.25-inch pipe). ` +
+        "Dual pipes halve the gas speed in each.",
+        "It costs torque twice: the piston pushes against it on every exhaust stroke, and the exhaust left behind in the " +
+        "cylinder (more with a long cam overlap) takes the fresh charge's room.",
+        "<b>Headers</b>: Smith's rule gives the rpm a primary length suits: 850 × exhaust duration ÷ (length in inches + 3). " +
+        "A cast manifold lets the pulses meet early and get in each other's way.",
+        `<b>In the game</b> it's a part for the ${fam?.exhaust ? `car's exhaust slot (${fam.exhaust.slot})` : "car's exhaust slot"}, ` +
+        "built on the stock exhaust's pipes and look: its torque change (torqueModExhaust, added before any boost multiplies it, as the " +
+        "game's own exhausts do) and the muffler's sound come from the design. The engine and the exported config fit it.",
+      ];
     },
   },
   {
@@ -635,7 +744,4 @@ export function sectionNotes(section, d, a, ctx) {
     .map(({ i, ...n }) => n);
 }
 
-export const COMING = [
-  ["Direct injection", "Fuel sprayed straight into the cylinder cools the charge, so the engine takes more compression and boost before it knocks."],
-  ["Exhaust", "Design the exhaust (manifold, pipe size, silencing) and export it, since its back pressure matters even more with boost."],
-];
+export const COMING = [];

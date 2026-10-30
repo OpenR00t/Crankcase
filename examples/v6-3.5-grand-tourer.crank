@@ -19,7 +19,20 @@
     "oil": "5w30",
     "sump": "wet",
     "flywheel": "stock",
-    "crank": "full"
+    "crank": "full",
+    "induction": "none",
+    "turboLayout": "single",
+    "scType": "roots",
+    "boost": 10,
+    "spoolRpm": 3500,
+    "handoverRpm": 4500,
+    "injection": "port",
+    "manifold": "cast",
+    "primary": 80,
+    "pipes": "dual",
+    "pipe": 54,
+    "cat": "standard",
+    "muffler": "turbo"
   },
   "gearing": {
     "gears": [
@@ -36,10 +49,10 @@
   },
   "summary": {
     "engine": "V6 3.50 L",
-    "peakPowerKw": 213,
-    "peakPowerRpm": 6700,
-    "peakTorqueNm": 382,
-    "peakTorqueRpm": 4650,
+    "peakPowerKw": 201,
+    "peakPowerRpm": 6550,
+    "peakTorqueNm": 368,
+    "peakTorqueRpm": 4600,
     "redline": 7900,
     "massKg": 198
   }

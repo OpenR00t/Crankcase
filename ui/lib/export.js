@@ -19,6 +19,7 @@ import { torqueRating } from "./fit.js";
 import { placedBlockNodes, placedEngineParts, placedInductionParts } from "./frame.js";
 import { writeDae, writeDaeMeshes } from "./dae.js";
 import { soundFor } from "./sounds.js";
+import { hasExhaust, freeFlowing, MANIFOLDS, MUFFLERS, CATS, PIPES } from "./exhaust.js";
 
 export const MOD_NAME = "crankcase";
 
@@ -40,6 +41,12 @@ export function inductionPartName(d, profile) {
 /** The forced induction's own model (turbos, blower). */
 export function inductionMeshName(d) {
   return `crankcase_${slug(d.name)}_induction`;
+}
+
+/** The exhaust part: for the donor family's exhaust slot. */
+export function exhaustPartName(d, profile) {
+  const fam = familyFor(profile, d.layout);
+  return fam.exhaust && hasExhaust(d) ? `${fam.exhaust.slot}_crankcase_${slug(d.name)}` : null;
 }
 
 export function flywheelPartName(d, profile) {
@@ -69,8 +76,9 @@ const r3 = (v) => Math.round(v * 1000) / 1000;
  */
 export function torqueTable(d, friction, dynamicFriction) {
   const red = redline(d);
-  // naturally aspirated: a turbo multiplies this table itself in the game
-  const na = naturallyAspirated(d);
+  // naturally aspirated (a turbo multiplies this table itself in the game) and with a
+  // free-flowing exhaust (the exhaust part adds its own share, as the game's exhausts do)
+  const na = freeFlowing(naturallyAspirated(d));
   const add = (rpm) => friction + dynamicFriction * rpm * Math.PI / 30;
   const at = (rpm) => Math.max(0, brakeTorque(na, rpm)) + add(rpm);
   const rows = [["rpm", "torque"], [0, 0], [500, r1(0.6 * at(1000))]];
@@ -181,21 +189,82 @@ export function buildEngine(d, profile, donorText) {
       clutch: { uiName: "Clutch", additionalEngineInertia: fw.inertia, clutchMass: fw.clutchMass },
     };
   }
+  // The exhaust: a part for the car's exhaust slot on its stock pipes, carrying what the
+  // design's exhaust does to the torque (the game adds it to the engine's table) and its sound.
+  let exhaust = null;
+  const exhaustTemplate = hasExhaust(d) && fam.exhaust ? donorFile[fam.exhaust.template] : null;
+  if (exhaustTemplate) {
+    exhaust = exhaustPartName(d, profile);
+    parts[exhaust] = buildExhaust(d, exhaustTemplate, fam.exhaust.slot);
+    // engines that carry the exhaust slot themselves get it as the default
+    for (const key of ["slots2", "slots"]) {
+      for (const row of part[key] ?? []) if (Array.isArray(row) && row[0] === fam.exhaust.slot) row[key === "slots2" ? 3 : 1] = exhaust;
+    }
+  }
   let induction = null;
   if (d.induction && d.induction !== "none") {
     if (!fam.intake) throw new Error(`no intake slot known for the ${fam.donorLabel}`);
     induction = inductionPartName(d, profile);
-    parts[induction] = buildInduction(d, fam, donorFile, donor, me, engineGroup);
+    parts[induction] = buildInduction(d, fam, donorFile, donor, me, engineGroup, !!exhaust);
+  }
+  // Some cars hang the exhaust slot off the stock intake (the Piccolina): their turbo parts
+  // replace that intake and have no exhaust slot, so an exhaust part would never be fitted.
+  // Then the induction part carries the exhaust's torque itself (the game merges mainEngine
+  // from every part), and the turbo's own pipes and sound stay.
+  let exhaustCarried = false;
+  if (exhaust && induction) {
+    const hasSlot = (p) => [...(p?.slots2 ?? []), ...(p?.slots ?? [])].some((r) => Array.isArray(r) && r[0] === fam.exhaust.slot);
+    const intakeRow = [...(donor.slots2 ?? []), ...(donor.slots ?? [])].find((r) => Array.isArray(r) && r[0] === fam.intake.slot);
+    const stockIntake = donorFile[intakeRow?.[donor.slots2 ? 3 : 1] ?? fam.intake.defaultIntake];
+    if (!hasSlot(parts[induction]) && stockIntake && hasSlot(stockIntake) && !hasSlot(part)) {
+      parts[induction].mainEngine.torqueModExhaust = parts[exhaust].mainEngine.torqueModExhaust;
+      delete parts[exhaust];
+      exhaust = null;
+      exhaustCarried = true;
+    }
   }
   const daeText = induction
     ? writeDaeMeshes([{ name: mesh, parts: placedEngineParts(d, fam) }, { name: inductionMeshName(d), parts: placedInductionParts(d, fam) }])
     : dae;
-  return { name, part, flywheel, induction, text: writeJBeam(parts, header), dae: daeText, mesh };
+  return { name, part, flywheel, induction, exhaust, exhaustCarried, text: writeJBeam(parts, header), dae: daeText, mesh };
 }
 
-/** The files an export reads for a family: the donor's, then any its intake parts live in. */
+/**
+ * The exhaust part, on the car's stock exhaust (its pipes, nodes and look): its
+ * torqueModExhaust is what the design's exhaust takes from (or, with tuned headers,
+ * adds to) the naturally aspirated torque, which the game adds to the engine's table
+ * before any boost; the tailpipe's muffling and the exhaust's tone follow the muffler.
+ */
+export function buildExhaust(d, template, slot) {
+  const part = clone(template);
+  const red = redline(d);
+  const na = naturallyAspirated(d), free = freeFlowing(na);
+  const rows = [["rpm", "torque"], [0, 0], [500, 0]];
+  for (let rpm = 1000; rpm <= red + 500; rpm += 250) rows.push([rpm, r1(brakeTorque(na, rpm) - brakeTorque(free, rpm))]);
+  const pipe = `${PIPES[d.pipes]?.count === 2 ? "dual " : ""}${(d.pipe / 25.4).toFixed(2)}"`;
+  part.information = {
+    authors: "Crankcase",
+    name: `Crankcase: ${d.name} exhaust (${MANIFOLDS[d.manifold].label.toLowerCase()}, ${pipe}, ${MUFFLERS[d.muffler].label.split(" (")[0].toLowerCase()})`,
+    value: 0,
+  };
+  part.slotType = slot;
+  delete part.variables;
+  part.mainEngine = { ...(part.mainEngine || {}), torqueModExhaust: rows };
+  const snd = MUFFLERS[d.muffler].sound;
+  const afterfire = Math.min(1, snd.afterfire + (d.cat === "none" ? 0.2 : 0));
+  part.soundConfigExhaust = { "$+lowShelfGain": snd.low, "$+highShelfGain": snd.high, "$+eqHighGain": 2, "$+eqFundamentalGain": snd.fundamental };
+  part.nodes = (part.nodes ?? []).map((row) => {
+    if (!Array.isArray(row) || !row[4] || typeof row[4] !== "object" || row[4].exhaustAudioMufflingCoef == null) return row;
+    return [...row.slice(0, 4), { ...row[4],
+      exhaustAudioMufflingCoef: snd.muffling, exhaustAudioGainChange: snd.gain, afterFireMufflingCoef: snd.muffling,
+      afterFireAudioCoef: afterfire, afterFireVolumeCoef: afterfire, afterFireVisualCoef: Math.min(1, afterfire * 0.8) }];
+  });
+  return part;
+}
+
+/** The files an export reads for a family: the donor's, then any its intake and exhaust parts live in. */
 export function donorFiles(fam) {
-  return [...new Set([fam.donorFile, ...(fam.intake?.files ?? [])])];
+  return [...new Set([fam.donorFile, ...(fam.intake?.files ?? []), ...(fam.exhaust?.file ? [fam.exhaust.file] : [])])];
 }
 
 /**
@@ -210,7 +279,7 @@ export function donorFiles(fam) {
  * while this part is fitted) where the supercharger is doing the work. With them the
  * game makes the torque Crankcase predicts at full throttle.
  */
-function buildInduction(d, fam, donorFile, engine, me, engineGroup) {
+function buildInduction(d, fam, donorFile, engine, me, engineGroup, withExhaust) {
   const slot = fam.intake.slot;
   const turbo = hasTurbo(d), sc = hasSupercharger(d);
   // a turbo builds on the car's own stock turbo when it has one; a supercharger alone,
@@ -236,8 +305,11 @@ function buildInduction(d, fam, donorFile, engine, me, engineGroup) {
   const mult = [], engineDef = tspec ? tspec.engineDef.map((p) => [...p]) : null;
   for (let rpm = 0; rpm <= red + 500; rpm += 250) {
     let m = 1;
-    if (rpm >= 1000 && rpm <= red) {
-      const table = Math.max(0, brakeTorque(na, rpm)) + fr(rpm);
+    if (rpm >= 1000 && rpm < red + 250) { // one point past the redline, so the curve into it is right
+      // what the game sums before boost: the engine's table, plus the exhaust part's share
+      const base = Math.max(0, brakeTorque(freeFlowing(na), rpm)) + fr(rpm);
+      const exh = withExhaust ? brakeTorque(na, rpm) - brakeTorque(freeFlowing(na), rpm) : 0;
+      const table = base + exh;
       const want = (brakeTorque(d, rpm) + fr(rpm)) / table;
       const psi = turbo ? turboBoost(d, rpm, tspec) : 0;
       if (turbo && psi >= 0.5) {
@@ -246,7 +318,8 @@ function buildInduction(d, fam, donorFile, engine, me, engineGroup) {
         if (k >= 0) engineDef[k][1] = +Math.min(1.5, Math.max(0, e)).toFixed(4);
       } else if (sc) {
         const t = turbo ? 1 + PER_PSI * psi * boostEfficiency(d, rpm, tspec) : 1;
-        m = want / (scCoef(rpm) * t);
+        // torqueModMult scales the engine's table only, not the exhaust's share
+        m = ((want * table) / (scCoef(rpm) * t) - exh) / base;
       }
     }
     mult.push([rpm, +m.toFixed(4)]);
@@ -257,6 +330,7 @@ function buildInduction(d, fam, donorFile, engine, me, engineGroup) {
   delete part.variables;
   const me2 = (part.mainEngine = { ...(part.mainEngine || {}) });
   delete me2.torqueModIntake; // the stock part's own extra torque: the design's numbers already say it all
+  delete me2.torqueModExhaust; // a stock turbo's built-in exhaust: the design's exhaust replaces it
   delete me2.turbocharger;
   delete me2.supercharger;
   if (mult.some(([, m]) => Math.abs(m - 1) > 0.002)) me2.torqueModMult = [["rpm", "torque"], ...mult];

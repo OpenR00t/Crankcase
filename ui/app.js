@@ -19,6 +19,8 @@ import { analyseRun } from "./lib/run.js";
 import { revUp, revDrop, totalInertia } from "./lib/rotating.js";
 import { steadyBoost, fullBoostRpm, naturallyAspirated, superchargerBoost, turboBoost } from "./lib/induction.js";
 import { SHIFT_STYLES, shiftTime } from "./lib/gearing.js";
+import { backPressure, headerTunedRpm, freeFlowing } from "./lib/exhaust.js";
+import { LOCKS, applyChange, setLock, clearLock, lockList } from "./lib/locks.js";
 
 const $ = (id) => document.getElementById(id);
 const fmt0 = (v) => Math.round(v).toLocaleString("en-US");
@@ -62,12 +64,12 @@ function renderSteps() {
   $("steps").querySelectorAll("button").forEach((b) => b.onclick = () => {
     state.section = b.dataset.id; save(); renderSteps(); renderSection(); redraw();
   });
-  $("coming").innerHTML = "<h3>Planned</h3>" +
-    COMING.map(([t, d]) => `<div><b>${t}</b>: ${d}</div>`).join("");
+  $("coming").hidden = !COMING.length;
+  $("coming").innerHTML = COMING.length ? "<h3>Planned</h3>" + COMING.map(([t, d]) => `<div><b>${t}</b>: ${d}</div>`).join("") : "";
 }
 
 function controlValue(c, v) {
-  if (c.fmt) return c.fmt(v);
+  if (c.fmt) return c.fmt(v, state.design);
   return `${Number.isInteger(c.step) || c.step >= 1 ? fmt0(v) : v} ${c.unit || ""}`.trim();
 }
 
@@ -135,7 +137,7 @@ const hi = (c) => (typeof c.max === "function" ? c.max(state.design) : c.max);
 function renderSection() {
   const l = SECTIONS.find((x) => x.id === state.section) || SECTIONS[0];
   // fit is about the engine's size and mass: not shown where nothing changes them
-  $("fitCard").hidden = ["gearing", "compression", "rotating"].includes(l.id);
+  $("fitCard").hidden = ["gearing", "compression", "rotating", "exhaust"].includes(l.id);
   const d = state.design;
   const ctl = l.controls.filter((c) => !c.show || c.show(d)).map((c) => {
     if (c.type === "choice") {
@@ -159,11 +161,7 @@ function renderSection() {
   if (l.id === "gearing") wireRatioTools();
   $("section").querySelectorAll("input[type=range]").forEach((inp) => {
     const c = l.controls.find((x) => x.key === inp.dataset.key);
-    inp.oninput = () => {
-      state.design[c.key] = Number(inp.value);
-      $("section").querySelector(`[data-out="${c.key}"]`).textContent = controlValue(c, state.design[c.key]);
-      changed();
-    };
+    inp.oninput = () => setControl(c, Number(inp.value), true);
   });
   // click a slider's value to type one in
   $("section").querySelectorAll(".lab .v[data-out]").forEach((out) => {
@@ -181,13 +179,12 @@ function renderSection() {
         const v = Number(box.value);
         if (apply && box.value.trim() !== "" && Number.isFinite(v)) {
           const clamped = Math.min(hi(c), Math.max(lo(c), v));
-          state.design[c.key] = Math.round(clamped / c.step) * c.step;
-          state.design[c.key] = Number(state.design[c.key].toFixed(6));
-          range.value = state.design[c.key];
           if (clamped !== v) out.title = `Kept within ${lo(c)} to ${hi(c)}`;
-          changed();
+          out.textContent = "";
+          setControl(c, Number((Math.round(clamped / c.step) * c.step).toFixed(6)), true);
         }
         out.textContent = controlValue(c, state.design[c.key]);
+        range.value = state.design[c.key];
       };
       box.onkeydown = (e) => { if (e.key === "Enter") finish(true); if (e.key === "Escape") finish(false); };
       box.onblur = () => finish(true);
@@ -196,11 +193,116 @@ function renderSection() {
   $("section").querySelectorAll(".choices button").forEach((b) => b.onclick = () => {
     const c = l.controls.find((x) => x.key === b.dataset.key);
     const v = b.dataset.v;
-    state.design[c.key] = isNaN(Number(v)) ? v : Number(v);
+    if (!setControl(c, isNaN(Number(v)) ? v : Number(v), false)) return;
     if (c.relayout) { state.design.cylinders = fixCylinders(state.design); renderSection(); }
-    else b.parentElement.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
-    changed();
   });
+}
+
+/**
+ * Set a control's value through the design locks: a held value moves the controls it's
+ * tied to, a limit stops a slider at the last allowed setting. Returns whether it moved.
+ */
+function setControl(c, value, slider) {
+  const r = applyChange(state.design, c.key, value, state.design.locks, { profile: profile() }, slider ? { step: c.step } : null);
+  const moved = r.d !== state.design;
+  if (moved) state.design = { ...r.d, locks: state.design.locks };
+  syncControls();
+  if (r.held) flashLock(r.held);
+  else if (r.range) lockMessage(`That needs a ${r.range} outside the slider's range.`);
+  if (moved) changed();
+  return moved;
+}
+
+/** Every control in the section showing the design's current values (locks move several at once). */
+function syncControls() {
+  const d = state.design;
+  $("section").querySelectorAll("input[type=range]").forEach((inp) => {
+    const v = d[inp.dataset.key];
+    if (Number(inp.value) !== v) inp.value = v;
+  });
+  const l = SECTIONS.find((x) => x.id === state.section) || SECTIONS[0];
+  $("section").querySelectorAll(".lab .v[data-out]").forEach((out) => {
+    if (out.querySelector("input")) return;
+    const c = l.controls.find((x) => x.key === out.dataset.out);
+    if (c) out.textContent = controlValue(c, d[c.key]);
+  });
+  $("section").querySelectorAll(".choices button").forEach((b) =>
+    b.classList.toggle("on", String(d[b.dataset.key]) === b.dataset.v));
+}
+
+/* ---------- design locks ---------- */
+const PADLOCK = (open) => `<svg viewBox="0 0 11 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1" y="5.5" width="9" height="6" rx="1.2" fill="currentColor" stroke="none"/>` +
+  `<path d="${open ? "M3 5.5V3.6a2.5 2.5 0 0 1 5-.6" : "M3 5.5V3.6a2.5 2.5 0 0 1 5 0v1.9"}"/></svg>`;
+let lockNote = { text: "", ok: false, timer: null };
+
+function lockMessage(text, ok = false) {
+  clearTimeout(lockNote.timer);
+  lockNote = { text, ok, timer: setTimeout(() => { lockNote.text = ""; renderLocks(); }, 4000) };
+  renderLocks();
+}
+
+function flashLock(key) {
+  const el = $("locks").querySelector(`[data-lock="${key}"]`);
+  if (!el) return;
+  el.classList.remove("held"); void el.offsetWidth; el.classList.add("held");
+  lockMessage(`Held by the ${LOCKS[key].label.toLowerCase()} lock`);
+}
+
+function renderLocks() {
+  const items = lockList(state.design, state.design.locks, { profile: profile() });
+  $("locks").innerHTML = `<span class="hd" title="Hold a value while you design: the sliders work around it">Locks</span>` +
+    items.map((i) => `<span class="lock${i.on ? " on" : ""}${i.on && !i.met ? " unmet" : ""}" data-lock="${i.key}" role="button" tabindex="0" ` +
+      `title="${(i.on ? (i.met ? "Locked. " : "Locked, but not met right now. ") : "Click to lock. ") + i.tip + (i.on && i.value ? " Click the value to type a target." : "")}">` +
+      `${PADLOCK(!i.on)}<span>${i.label}</span>${i.on && i.value ? `<span class="lv">${i.value}</span>` : ""}</span>`).join("") +
+    (lockNote.text ? `<span class="lmsg${lockNote.ok ? " ok" : ""}">${lockNote.text}</span>` : "");
+  $("locks").querySelectorAll(".lock").forEach((el) => {
+    const key = el.dataset.lock;
+    el.onclick = (e) => {
+      if (e.target.closest("input")) return;
+      if (e.target.closest(".lv")) return typeLock(el, key);
+      toggleLock(key);
+    };
+    el.onkeydown = (e) => { if (e.target === el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleLock(key); } };
+  });
+}
+
+function applyLock(r) {
+  if (r.error) { lockMessage(r.error); return false; }
+  state.design = { ...r.d, locks: r.locks };
+  if (r.message) lockMessage(r.message, true);
+  syncControls();
+  changed();
+  return true;
+}
+
+function toggleLock(key) {
+  const locks = state.design.locks ?? {};
+  if (locks[key] != null && locks[key] !== false) {
+    state.design = { ...state.design, locks: clearLock(locks, key) };
+    changed();
+    return;
+  }
+  applyLock(setLock(state.design, key, null, locks, { profile: profile() }));
+}
+
+/** Type a lock's target: 2.0 for a 2.0 L engine, 7000 for the redline. */
+function typeLock(el, key) {
+  const L = LOCKS[key], lv = el.querySelector(".lv");
+  const box = document.createElement("input");
+  box.type = "number"; box.step = L.step; box.value = Number(state.design.locks[key].toFixed(L.step < 1 ? 2 : 0));
+  lv.replaceWith(box); box.focus(); box.select();
+  let done = false;
+  const finish = (apply) => {
+    if (done) return; done = true;
+    const v = Number(box.value);
+    if (apply && box.value.trim() !== "" && Number.isFinite(v)) {
+      applyLock(setLock(state.design, key, v, state.design.locks, { profile: profile() }));
+    }
+    renderLocks();
+  };
+  box.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") finish(true); if (e.key === "Escape") finish(false); };
+  box.onclick = (e) => e.stopPropagation();
+  box.onblur = () => finish(true);
 }
 
 function renderWhy(a) {
@@ -239,12 +341,14 @@ function delta(v, b, unit, digits = 0) {
 }
 
 function renderStats(a, b) {
-  const s = (k, v, d) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>${d}</div>`;
+  const locks = state.design.locks ?? {};
+  const pad = (key) => (locks[key] != null && locks[key] !== false ? `<svg class="pad" viewBox="0 0 11 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1" y="5.5" width="9" height="6" rx="1.2" fill="currentColor" stroke="none"/><path d="M3 5.5V3.6a2.5 2.5 0 0 1 5 0v1.9"/></svg>` : "");
+  const s = (k, v, d, key) => `<div class="stat"><div class="k">${k}${key ? pad(key) : ""}</div><div class="v">${v}</div>${d}</div>`;
   const md = mass(state.design), mb = mass(state.baseline);
   $("stats").innerHTML = [
-    s("Engine", `${layoutName(state.design)} <small>${a.litres.toFixed(2)} L</small>`, delta(a.litres, b.litres, "L", 2)),
-    s("Mass", `${fmt0(md)} <small>kg</small>`, delta(md, mb, "kg")),
-    s("Redline", `${fmt0(a.redline)} <small>rpm</small>`, delta(a.redline, b.redline, "rpm")),
+    s("Engine", `${layoutName(state.design)} <small>${a.litres.toFixed(2)} L</small>`, delta(a.litres, b.litres, "L", 2), "displacement"),
+    s("Mass", `${fmt0(md)} <small>kg</small>`, delta(md, mb, "kg"), "mass"),
+    s("Redline", `${fmt0(a.redline)} <small>rpm</small>`, delta(a.redline, b.redline, "rpm"), "redline"),
     s("Peak torque", `${fmt0(a.peakTorque)} <small>N·m @ ${fmt0(a.peakTorqueRpm)}</small>`, delta(a.peakTorque, b.peakTorque, "N·m")),
     s("Peak power", `${fmt0(a.peakPower)} <small>kW · ${fmt0(hp(a.peakPower))} hp</small>`, delta(a.peakPower, b.peakPower, "kW")),
     s("Specific output", `${fmt0(a.specificPower)} <small>kW/L</small>`, delta(a.specificPower, b.specificPower, "kW/L")),
@@ -291,7 +395,8 @@ function renderRun(ra) {
       return `<tr><td>${fmt0(t.rpm)}</td><td>${f0(t.logged)}</td><td>${f0(t.design)}</td><td class="${cls(p, 5)}">${sign(p)}</td></tr>`; }).join("");
     const mean = ra.torque.reduce((s, t) => s + Math.abs(pct(t.logged, t.design)), 0) / ra.torque.length;
     parts.push(`<div><h4>Full-throttle torque</h4><table><tr><th>rpm</th><th>logged</th><th>design</th><th></th></tr>${rows}</table>` +
-      `<div class="note">Average difference ${mean.toFixed(1)}%. Only rpm the run held at full throttle, clutch in, appear: ` +
+      `<div class="note">Average difference ${mean.toFixed(1)}%. Logged torque plus what the revs climbing took to spin up the engine's own crank and flywheel; ` +
+      `moments where the clutch slipped or the rev limiter cut are left out. Only rpm the run held at full throttle, clutch in, appear: ` +
       `a pull from low revs in a tall gear covers the whole curve.</div></div>`);
   } else {
     parts.push(`<div><h4>Full-throttle torque</h4><div class="note">No full-throttle running in this run, so the torque curve can't be checked. A pull from low revs in a tall gear covers it.</div></div>`);
@@ -517,6 +622,44 @@ function onTimeGrid(curves, step, until) {
 }
 
 /** Forced induction: boost against rpm, and the torque with and without it. */
+function exhaustChart() {
+  const d = state.design, bd = state.baseline;
+  $("sectionChartTitle").textContent = "Back pressure";
+  $("sectionChartSub").textContent = "kPa at full throttle · it grows with the square of the gas flow";
+  const red = Math.max(redline(d), redline(bd));
+  const x = [];
+  for (let n = 1000; n <= red; n += 50) x.push(n);
+  const mine = (dd, f) => x.map((n) => (n <= redline(dd) ? f(n) : null));
+  const bp = mine(d, (n) => backPressure(d, n) / 1000), bb = mine(bd, (n) => backPressure(bd, n) / 1000);
+  const top = Math.max(10, ...bp.filter((v) => v != null), ...bb.filter((v) => v != null)) * 1.15;
+  $("sectionLegend").innerHTML = `<span><i class="sw" style="background:var(--orange)"></i>Back pressure</span><span><i class="sw dash"></i>Baseline</span>`;
+  const free = freeFlowing(d);
+  const t = mine(d, (n) => Math.max(0, brakeTorque(d, n))), tf = mine(d, (n) => Math.max(0, brakeTorque(free, n)));
+  const marks = d.manifold === "headers" ? [{ x: headerTunedRpm(d), color: C.aqua, label: "headers" }] : [];
+  return {
+    x, xUnit: "rpm",
+    scales: { y: { label: "kPa", range: [0, Math.ceil(top / 5) * 5] } },
+    series: [
+      { label: "bp", name: "Back pressure", unit: "kPa", fmt: (v) => v.toFixed(1), color: C.orange, values: bp },
+      { label: "base", name: "Baseline", unit: "kPa", fmt: (v) => v.toFixed(1), color: C.fg4, dash: true, width: 1.5, values: bb },
+    ],
+    marks,
+    pin: "backpressure",
+    extra: {
+      x, height: 200, xUnit: "rpm",
+      title: "Torque with this exhaust and with a free-flowing one · N·m at the flywheel",
+      legend: `<span><i class="sw" style="background:var(--green)"></i>This exhaust</span><span><i class="sw dash"></i>Free-flowing</span>`,
+      scales: { y: { label: "N·m", range: [0, Math.ceil(Math.max(...tf.filter((v) => v != null), 1) * 1.15 / 50) * 50] } },
+      series: [
+        { label: "exh", name: "This exhaust", unit: "N·m", fmt: (v) => Math.round(v), color: C.green, values: t },
+        { label: "free", name: "Free-flowing", unit: "N·m", fmt: (v) => Math.round(v), color: C.fg4, dash: true, width: 1.5, values: tf },
+      ],
+      marks,
+      pin: "exhaustTorque",
+    },
+  };
+}
+
 function inductionChart(a, b) {
   const d = state.design, bd = state.baseline;
   const on = (x) => x.induction && x.induction !== "none";
@@ -648,6 +791,7 @@ function sectionChart(a, b) {
     };
   }
   if (id === "induction") return inductionChart(a, b);
+  if (id === "exhaust") return exhaustChart();
   if (id === "gearing") {
     const g = analyseGearing(state.design, carFor(state.design));
     const colours = [C.green, C.aqua, C.blue, C.purple, C.yellow, C.orange];
@@ -712,6 +856,7 @@ function redraw() {
   for (const el of held) el.style.minHeight = `${el.offsetHeight}px`;
   const a = analyse(state.design, 50), b = analyse(state.baseline, 50);
   renderStats(a, b);
+  renderLocks();
   renderWhy(a);
   renderFit(a);
   $("baselineName").textContent = `baseline: ${state.baseline.name}`;
@@ -900,15 +1045,18 @@ function openExport() {
     try {
       // read and build everything first, so a failure writes nothing
       const donor = await Promise.all(donorFiles(fam).map((f) => platform.readVehicleFile(f)));
-      const { text, dae } = buildEngine(d, prof, donor);
-      const cfg = prof.config ? buildConfig(d, prof, await platform.readVehicleFile(prof.config.base)) : null;
+      const built = buildEngine(d, prof, donor);
+      const { text, dae } = built;
+      const cfg = prof.config ? buildConfig(d, prof, await platform.readVehicleFile(prof.config.base), built) : null;
       await platform.exportFile(exportRelativePath(d, prof, "dae"), dae);
       const r = await platform.exportFile(rel, text);
       let notes = [];
+      if (built.exhaustCarried) notes.push(`The ${prof.name}'s exhaust slot hangs off its stock intake, which the turbo replaces, so the turbo part carries the exhaust's torque; the pipes and sound are the stock turbo's.`);
+      else if (!built.exhaust && d.manifold != null) notes.push(`No exhaust slot found on the ${fam.donorLabel}: the car keeps its own exhaust, so it makes a little less than shown.`);
       if (cfg) {
         await platform.exportFile(exportRelativePath(d, prof, "pc"), cfg.pc);
         await platform.exportFile(infoRelativePath(d, prof), cfg.info);
-        notes = cfg.notes;
+        notes = [...notes, ...cfg.notes];
       }
       msg.className = "msg ok";
       msg.innerHTML = `Written: ${r.path}, its .dae model${prof.config ? " and the vehicle config" : ""}.` +

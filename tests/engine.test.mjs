@@ -14,6 +14,7 @@ import { writeDae } from "../ui/lib/dae.js";
 import { soundFor } from "../ui/lib/sounds.js";
 import * as Parts from "../ui/lib/parts.js";
 import * as Gear from "../ui/lib/gearing.js";
+import * as Exh from "../ui/lib/exhaust.js";
 
 const D = E.DEFAULT_DESIGN;
 const at = (a, rpm) => a.torque[a.rpm.indexOf(rpm)];
@@ -226,7 +227,8 @@ test("knock: compression and bore raise it, octane cures it", () => {
 test("parts: the default parts give the default engine", () => {
   const r = Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS });
   assert.ok(Math.abs(r.cam - D.cam) < 0.01 && Math.abs(r.tuneRpm - D.tuneRpm) <= 100 && Math.abs(r.friction - D.friction) < 0.01);
-  assert.ok(Math.abs(E.analyse(r).peakPower - E.analyse(D).peakPower) < 2);
+  // with a free-flowing exhaust, as the summary numbers knew no exhaust
+  assert.ok(Math.abs(E.analyse(Exh.freeFlowing(r)).peakPower - E.analyse(D).peakPower) < 2);
 });
 
 test("parts: what each part does", () => {
@@ -397,7 +399,9 @@ test("a recorded run: torque, gear ratios, shifts and what the car did", () => {
     if (rpm > 6000 && gear < rs.length) { gear++; rpm = Gear.rpmAt(d, kmh, rs[gear - 1]); }
     const wheelAv = (kmh / 3.6 / r) * 1.02; // driven wheels slip 2% forward
     ch.speed.push(kmh); ch.rpm.push(rpm); ch.gear.push(gear); ch.thr.push(100); ch.clutch.push(0);
-    ch.tq.push(E.brakeTorque(d, rpm) * 1.03); // the game makes 3% more
+    // the game makes 3% more; what's logged leaves through the clutch, less what spins up the engine itself
+    const alpha = (Gear.rpmAt(d, kmh + 4 / gear / rate, rs[gear - 1]) - rpm) * rate * Math.PI / 30;
+    ch.tq.push(E.brakeTorque(d, rpm) * 1.03 - Rot.totalInertia(d) * alpha);
     ch.wl.push(wheelAv); ch.wr.push(wheelAv); ch.wf.push(kmh / 3.6 / r);
     kmh += 4 / gear / rate;
   }
@@ -597,10 +601,11 @@ test("turbo: boost reaches its target at the full-boost rpm, fills the cylinders
   assert.equal(Ind.spline([[0, 0], [10, 5], [20, 7], [30, 8]], 10), 5);
 });
 
-/** BeamNG's full-throttle torque from exported parts: engine table, intake part's multiplier, turbo and supercharger. */
-function gameTorque(engine, ind, rpm) {
+/** BeamNG's full-throttle torque from exported parts: engine table, intake part's multiplier, exhaust part, turbo and supercharger. */
+function gameTorque(engine, ind, rpm, exhaust = null) {
   const curve = (rows) => rows.slice(1);
   const base = Ind.spline(curve(engine.torque), rpm);
+  const exh = exhaust?.mainEngine?.torqueModExhaust ? Ind.spline(curve(exhaust.mainEngine.torqueModExhaust), rpm) : 0;
   const mult = ind.mainEngine?.torqueModMult ? Ind.spline(curve(ind.mainEngine.torqueModMult), rpm) : 1;
   let coef = 1;
   const tc = ind.turbocharger;
@@ -620,13 +625,20 @@ function gameTorque(engine, ind, rpm) {
     const psi = Math.max((shape[0] * r * r + shape[1]) * sc.pressurePSIPer1kRPM * 0.001 * blower, 0);
     coef *= Math.max(1 + 0.0000087 * psi * 6894.757293178 - sc.crankLossPer1kRPM * 0.001 * blower, 0);
   }
-  return base * mult * coef - (engine.friction + engine.dynamicFriction * rpm * Math.PI / 30);
+  return (base * mult + exh) * coef - (engine.friction + engine.dynamicFriction * rpm * Math.PI / 30);
 }
 
 const INDUCTION_DONOR = TURBO_DONOR
   .replace('["bx_enginemounts", ["bx_enginemounts"], [], "bx_enginemounts", "Engine Mounts"]',
     '["bx_enginemounts", ["bx_enginemounts"], [], "bx_enginemounts", "Engine Mounts"],\n    ["bx_intake_i4_large", ["bx_intake_i4_large"], [], "bx_intake_i4_large", "Intake"]')
   .replace(/}\s*$/, `,
+"bx_exhaust_i4": {
+  "information": {"authors": "test", "name": "Stock exhaust", "value": 1},
+  "slotType": "bx_exhaust_i4",
+  "mainEngine": {"torqueModExhaust": [["rpm", "torque"], [0, 0], [6000, -12]]},
+  "soundConfigExhaust": {"$+lowShelfGain": 13},
+  "nodes": [["id", "posX", "posY", "posZ"], ["ex1", 0, 1, 0.3], ["ex7r", 0, 2, 0.3, {"exhaustAudioMufflingCoef": 0.22, "afterFireAudioCoef": 0.2}]],
+},
 "bx_intake_i4_large": {
   "information": {"authors": "test", "name": "Stock intake", "value": 1},
   "slotType": "bx_intake_i4_large",
@@ -652,7 +664,8 @@ test("induction export: every layout makes the predicted torque in BeamNG", () =
     const out = X.buildEngine(d, testProfile, INDUCTION_DONOR);
     assert.equal(out.induction, "bx_intake_i4_large_crankcase_boosted");
     const parts = parseJBeam(out.text);
-    const ind = parts[out.induction], me = parts[out.name].mainEngine;
+    const ind = parts[out.induction], me = parts[out.name].mainEngine, exh = parts[out.exhaust];
+    assert.equal(out.exhaust, "bx_exhaust_i4_crankcase_boosted");
     assert.equal(ind.slotType, "bx_intake_i4_large");
     assert.equal(ind.mainEngine.torqueModIntake, undefined);
     assert.equal(!!ind.turbocharger, Ind.hasTurbo(d), c.induction);
@@ -666,7 +679,7 @@ test("induction export: every layout makes the predicted torque in BeamNG", () =
     assert.ok(me.maxTorqueRating >= E.analyse(d).peakTorque);
     for (let rpm = 1500; rpm <= E.redline(d); rpm += 125) {
       // exact on the 250 rpm grid; between points both sides interpolate their own way
-      const game = gameTorque(me, ind, rpm), want = E.brakeTorque(d, rpm);
+      const game = gameTorque(me, ind, rpm, exh), want = E.brakeTorque(d, rpm);
       assert.ok(Math.abs(game - want) < (rpm % 250 ? 0.025 * want + 2 : 1.5), `${c.induction}/${c.turboLayout ?? c.scType} at ${rpm}: game ${game.toFixed(1)}, Crankcase ${want.toFixed(1)}`);
     }
   }
@@ -676,6 +689,7 @@ test("induction export: every layout makes the predicted torque in BeamNG", () =
   const pc = JSON.parse(cfg.pc);
   assert.equal(pc.parts.bx_intake_i4_large, "bx_intake_i4_large_crankcase_boosted");
   assert.equal(pc.vars.$wastegateStart, 11.5);
+  assert.equal(pc.parts.bx_exhaust_i4, "bx_exhaust_i4_crankcase_boosted");
   assert.equal(JSON.parse(cfg.info)["Induction Type"], "Turbo");
   assert.equal(JSON.parse(VC3.buildConfig({ ...d, induction: "supercharger" }, PROFILES.bx, BASE_PC).info)["Induction Type"], "Supercharger");
 });
@@ -801,4 +815,129 @@ test("trucks that spell their block corners en1r ... get them spelt the same way
   const ids = parseJBeam(out.text)[out.name].nodes.filter(Array.isArray).map((r) => r[0]);
   for (const id of ["en1r", "en2l", "en3r", "en4l"]) assert.ok(ids.includes(id), id);
   assert.ok(!ids.includes("e1r"));
+});
+
+/* ---------- design locks ---------- */
+import * as Lk from "../ui/lib/locks.js";
+
+test("locks: a held displacement trades bore against stroke", () => {
+  const d = Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS });
+  const s = Lk.setLock(d, "displacement", 2.0, {}, null);
+  assert.ok(!s.error);
+  assert.ok(Math.abs(E.displacement(s.d) * 1000 - 2.0) < 1e-3);
+  const r = Lk.applyChange(s.d, "bore", 90, s.locks, null, { step: 0.5 });
+  assert.equal(r.d.bore, 90);
+  assert.ok(Math.abs(E.displacement(r.d) * 1000 - 2.0) < 1e-3 && r.d.stroke < s.d.stroke);
+  // more cylinders, same litres: both shrink, the proportions stay
+  const six = Lk.applyChange(r.d, "cylinders", 6, s.locks, null);
+  assert.ok(Math.abs(E.displacement(six.d) * 1000 - 2.0) < 1e-3);
+  assert.ok(Math.abs(six.d.bore / six.d.stroke - r.d.bore / r.d.stroke) < 1e-3);
+});
+
+test("locks: displacement and redline together leave the bore nowhere to go", () => {
+  const d = Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS });
+  let L = Lk.setLock(d, "displacement", 2.4, {}, null);
+  L = Lk.setLock(L.d, "redline", 7000, L.locks, null);
+  assert.ok(!L.error, L.error);
+  assert.equal(E.redline(L.d), 7000);
+  const r = Lk.applyChange(L.d, "bore", L.d.bore + 3, L.locks, null, { step: 0.5 });
+  assert.equal(r.d.bore, L.d.bore);
+  assert.ok(r.held);
+  // a stronger build gets a longer stroke at the same redline, and the bore follows the litres
+  const race = Lk.applyChange(L.d, "build", "race", L.locks, null);
+  assert.equal(E.redline(race.d), 7000);
+  assert.ok(race.d.stroke > L.d.stroke && Math.abs(E.displacement(race.d) * 1000 - 2.4) < 1e-3);
+});
+
+test("locks: sliders stop at a mass ceiling and where knock starts", () => {
+  const d = Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS, compression: 9.5 });
+  const m = Lk.setLock(d, "mass", G.mass(d) + 5, {}, null);
+  const r = Lk.applyChange(d, "bore", 105, m.locks, null, { step: 0.5 });
+  assert.equal(r.held, "mass");
+  assert.ok(r.d.bore > d.bore && r.d.bore < 105 && G.mass(r.d) <= G.mass(d) + 5);
+  const k = Lk.setLock(d, "knock", null, {}, null);
+  assert.ok(!k.error);
+  const c = Lk.applyChange(k.d, "compression", 14, k.locks, null, { step: 0.1 });
+  assert.equal(c.held, "knock");
+  assert.ok(c.d.compression > 9.5 && c.d.compression < 14);
+  assert.ok(Lk.checkMet("knock", c.d) && !Lk.checkMet("knock", { ...c.d, compression: c.d.compression + 0.2 }));
+  // turning the lock on while it knocks lowers the compression to the clean ratio
+  const hot = Lk.setLock({ ...d, compression: 13 }, "knock", null, {}, null);
+  assert.ok(hot.d.compression < 13 && Lk.checkMet("knock", hot.d), hot.message);
+});
+
+/* ---------- direct injection and the exhaust ---------- */
+test("direct injection resists knock and fills a little better", () => {
+  const d = Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS, compression: 12.5 });
+  const di = { ...d, injection: "direct" };
+  assert.ok(E.knockIndex(di, 3000) < 0.9 * E.knockIndex(d, 3000));
+  assert.ok(E.analyse(d).knockLost > 0 && E.analyse(di).knockLost < E.analyse(d).knockLost);
+  assert.ok(E.cylinderFilling(di, 4000) > E.cylinderFilling(d, 4000));
+});
+
+test("exhaust: back pressure costs torque, more with boost; tuned headers give some back", () => {
+  const d = Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS });
+  const free = Exh.freeFlowing(d);
+  const red = E.redline(d);
+  assert.equal(Exh.backPressure(free, 5000), 0);
+  assert.ok(Exh.backPressure(d, red) > 2.5 * Exh.backPressure(d, red / 2)); // about the square of the flow
+  assert.ok(E.brakeTorque(d, red) < E.brakeTorque(free, red));
+  const big = { ...d, pipe: 76, muffler: "straight" };
+  assert.ok(E.brakeTorque(big, red) > E.brakeTorque(d, red));
+  const turbo = { ...d, induction: "turbo", boost: 15, spoolRpm: 3500, compression: 8.5 };
+  const costNa = E.brakeTorque(free, red) - E.brakeTorque(d, red);
+  const costTurbo = E.brakeTorque(Exh.freeFlowing(turbo), red) - E.brakeTorque(turbo, red);
+  assert.ok(costTurbo > 2 * costNa, `${costTurbo} vs ${costNa}`);
+  const headers = { ...d, manifold: "headers", primary: 80 };
+  const tuned = Exh.headerTunedRpm(headers);
+  assert.ok(tuned > 4000 && tuned < 8000);
+  assert.ok(E.brakeTorque(headers, tuned) > E.brakeTorque(d, tuned));
+  assert.ok(Exh.headerTunedRpm({ ...headers, primary: 100 }) < tuned);
+});
+
+test("exhaust export: the part carries the exhaust's torque and its muffler's sound", () => {
+  const d = { ...Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS, ...Gear.DEFAULT_GEARING }), name: "Loud", muffler: "none", cat: "none" };
+  const out = X.buildEngine(d, testProfile, INDUCTION_DONOR);
+  const parts = parseJBeam(out.text);
+  assert.equal(out.exhaust, "bx_exhaust_i4_crankcase_loud");
+  const ex = parts[out.exhaust];
+  assert.equal(ex.slotType, "bx_exhaust_i4");
+  for (const [rpm, t] of ex.mainEngine.torqueModExhaust.slice(1)) {
+    if (rpm < 1000) continue;
+    const want = E.brakeTorque(Ind.naturallyAspirated(d), rpm) - E.brakeTorque(Exh.freeFlowing(Ind.naturallyAspirated(d)), rpm);
+    assert.ok(Math.abs(t - want) < 0.06, `${rpm}`);
+  }
+  const tail = ex.nodes.find((r) => Array.isArray(r) && r[0] === "ex7r")[4];
+  assert.equal(tail.exhaustAudioMufflingCoef, Exh.MUFFLERS.none.sound.muffling);
+  // the engine's exhaust slot defaults to it (the fixture's engine has none, so check the config instead)
+  const pc = JSON.parse(VC3.buildConfig(d, testProfile, BASE_PC, out).pc);
+  assert.equal(pc.parts.bx_exhaust_i4, out.exhaust);
+  // the engine's own table stays free-flowing; the game sums table + exhaust part
+  const me = parts[out.name].mainEngine;
+  for (let rpm = 1500; rpm <= E.redline(d); rpm += 250) {
+    const game = gameTorque(me, {}, rpm, ex);
+    assert.ok(Math.abs(game - E.brakeTorque(d, rpm)) < 1, `${rpm}: ${game} vs ${E.brakeTorque(d, rpm)}`);
+  }
+  // no exhaust template: no part, and the car keeps its own
+  const none = X.buildEngine(d, testProfile, DONOR);
+  assert.equal(none.exhaust, null);
+});
+
+test("exhaust export: when the turbo replaces the intake that holds the exhaust slot, the turbo carries the exhaust", () => {
+  // like the Piccolina: the exhaust slot hangs off the stock intake, and its turbos have none
+  const donor = INDUCTION_DONOR.replace('"slotType": "bx_intake_i4_large",\n  "mainEngine": {"torqueModIntake": [["rpm", "torque"], [0, 0], [4000, 5]]},',
+    '"slotType": "bx_intake_i4_large",\n  "slots2": [["name", "allowTypes", "denyTypes", "default", "description"], ["bx_exhaust_i4", ["bx_exhaust_i4"], [], "bx_exhaust_i4", "Exhaust"]],\n  "mainEngine": {"torqueModIntake": [["rpm", "torque"], [0, 0], [4000, 5]]},');
+  assert.notEqual(donor, INDUCTION_DONOR);
+  const d = { ...Parts.resolve({ ...D, ...Parts.DEFAULT_PARTS, ...Gear.DEFAULT_GEARING }), name: "Carried", compression: 9.5,
+    induction: "turbo", turboLayout: "single", boost: 12, spoolRpm: 3800 };
+  const out = X.buildEngine(d, testProfile, donor);
+  assert.equal(out.exhaust, null);
+  assert.equal(out.exhaustCarried, true);
+  const parts = parseJBeam(out.text), ind = parts[out.induction], me = parts[out.name].mainEngine;
+  assert.ok(ind.mainEngine.torqueModExhaust);
+  for (let rpm = 1500; rpm <= E.redline(d); rpm += 250) {
+    const game = gameTorque(me, ind, rpm, ind), want = E.brakeTorque(d, rpm);
+    assert.ok(Math.abs(game - want) < 1.5, `${rpm}: game ${game.toFixed(1)}, Crankcase ${want.toFixed(1)}`);
+  }
+  assert.equal(JSON.parse(VC3.buildConfig(d, testProfile, BASE_PC, out).pc).parts.bx_exhaust_i4, undefined);
 });

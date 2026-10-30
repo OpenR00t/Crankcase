@@ -53,6 +53,9 @@ export const DEFAULT_PARTS = {
   rings: "standard", bearings: "standard", oil: "5w30", sump: "wet",
   flywheel: "stock", crank: "full",
   induction: "none", turboLayout: "single", scType: "roots", boost: 10, spoolRpm: 3500, handoverRpm: 4500,
+  injection: "port",
+  // a road car's exhaust (see exhaust.js)
+  manifold: "cast", primary: 80, pipes: "single", pipe: 57, cat: "standard", muffler: "chambered",
 };
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));

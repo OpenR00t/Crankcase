@@ -8,7 +8,8 @@
 // that depends on the rest of the car (tyres, aero, exhaust, mass, set up in
 // BeamNG) is shown as measured, not checked against a model.
 
-import { brakeTorque } from "./engine.js";
+import { brakeTorque, redline } from "./engine.js";
+import { totalInertia } from "./rotating.js";
 import { ratios, rpmAt } from "./gearing.js";
 import { slug } from "./export.js";
 
@@ -71,14 +72,41 @@ export function analyseRun(run, d, laps = []) {
   const n = c.speed.length, dt = 1 / c.rate;
   const out = { torque: [], gears: [], points: [], shifts: [], summary: {}, laps, matches: matchesDesign(run, d) };
 
-  // full-throttle torque
+  // Full-throttle torque. The logged torque is what leaves the engine through the clutch:
+  // while the revs climb, part of the engine's torque goes into spinning up its own crank
+  // and flywheel, so that share (inertia x angular acceleration) is added back. Samples where
+  // the clutch slips (engine speed running away from the driven wheels) or the rev limiter
+  // cuts are left out.
   if (c.torque && c.rpm && c.throttle) {
+    const inertia = totalInertia(d);
+    const av = drivenWheelSpeed(run, c);
+    const limiter = redline(d) - 150;
+    // the clutch is locked when engine speed / wheel speed sits at its gear's usual ratio
+    const usual = new Map();
+    if (av && c.gear) {
+      const per = new Map();
+      for (let i = 0; i < n; i++) if (c.gear[i] > 0 && av[i] > 5 && c.throttle[i] > 50) {
+        if (!per.has(c.gear[i])) per.set(c.gear[i], []);
+        per.get(c.gear[i]).push((c.rpm[i] * Math.PI / 30) / av[i]);
+      }
+      for (const [g, xs] of per) usual.set(g, median(xs));
+    }
+    const k = Math.max(1, Math.round(0.06 * c.rate)); // ±60 ms for the acceleration and cut checks
     const bins = new Map();
-    for (let i = 0; i < n; i++) {
+    for (let i = k; i < n - k; i++) {
       if (c.throttle[i] < FULL_THROTTLE || (c.clutch && c.clutch[i] > 2) || (c.gear && c.gear[i] < 1)) continue;
+      if (c.rpm[i] > limiter) continue;
+      if (av && c.gear && usual.has(c.gear[i]) && av[i] > 5) {
+        const r = (c.rpm[i] * Math.PI / 30) / av[i] / usual.get(c.gear[i]);
+        if (Math.abs(r - 1) > 0.02) continue;
+      }
+      let cut = false;
+      for (let j = i - k; j <= i + k; j++) if (c.torque[j] < 0.5 * c.torque[i]) cut = true;
+      if (cut) continue;
+      const alpha = ((c.rpm[i + k] - c.rpm[i - k]) * Math.PI / 30) / (2 * k * dt);
       const b = Math.round(c.rpm[i] / BIN) * BIN;
       if (!bins.has(b)) bins.set(b, []);
-      bins.get(b).push(c.torque[i]);
+      bins.get(b).push(c.torque[i] + inertia * alpha);
     }
     out.torque = [...bins.entries()]
       .filter(([, v]) => v.length >= MIN_SAMPLES)

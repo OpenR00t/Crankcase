@@ -32,6 +32,8 @@ export const PROFILES = {
         // turbo (its pipework, intercooler, nodes and sounds), a supercharger from the slot's
         // stock intake; the design sets everything that decides how they behave
         intake: { slot: "bx_intake_i4_large", turboTemplate: "bx_intake_i4_large_stage2", turboLabel: "single turbo" },
+        // the design's exhaust is written as a part for this slot, on the stock exhaust's pipes
+        exhaust: { slot: "bx_exhaust_i4", template: "bx_exhaust_i4", file: "vehicles/bx/bx_exhaust_i4.jbeam" },
       },
       v: {
         donorFile: "vehicles/bx/bx_engine_v8_4.5.jbeam",
@@ -42,6 +44,7 @@ export const PROFILES = {
         drop: ["pickup_engine_v8_internals", "pickup_engine_v8_ecu"],
         // the V8's stock turbos are a pair, one per bank, with their own exhaust manifolds
         intake: { slot: "bx_intake_v8", turboTemplate: "bx_turbo_v8_stage3", turboLabel: "twin turbos (one per bank)" },
+        exhaust: { slot: "bx_exhaust_v8", template: "bx_exhaust_v8", file: "vehicles/bx/bx_exhaust_v8.jbeam" },
       },
     },
     // Flat engines borrow the inline donor (the BX has no boxer).

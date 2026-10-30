@@ -19,7 +19,20 @@
     "oil": "10w40",
     "sump": "wet",
     "flywheel": "stock",
-    "crank": "full"
+    "crank": "full",
+    "induction": "none",
+    "turboLayout": "single",
+    "scType": "roots",
+    "boost": 10,
+    "spoolRpm": 3500,
+    "handoverRpm": 4500,
+    "injection": "port",
+    "manifold": "cast",
+    "primary": 80,
+    "pipes": "dual",
+    "pipe": 57,
+    "cat": "standard",
+    "muffler": "chambered"
   },
   "gearing": {
     "gears": [
@@ -36,10 +49,10 @@
   },
   "summary": {
     "engine": "V8 5.67 L",
-    "peakPowerKw": 255,
-    "peakPowerRpm": 5400,
-    "peakTorqueNm": 578,
-    "peakTorqueRpm": 3550,
+    "peakPowerKw": 238,
+    "peakPowerRpm": 5300,
+    "peakTorqueNm": 554,
+    "peakTorqueRpm": 3500,
     "redline": 6150,
     "massKg": 267
   }

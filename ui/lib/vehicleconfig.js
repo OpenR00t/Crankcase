@@ -8,7 +8,7 @@
 // suspension, intake and exhaust) stays as the stock config has it.
 
 import { parseJBeam } from "./jbeamparse.js";
-import { partName, flywheelPartName, inductionPartName } from "./export.js";
+import { partName, flywheelPartName, inductionPartName, exhaustPartName } from "./export.js";
 import { familyFor } from "./profiles.js";
 import { turboSpec, hasTurbo } from "./induction.js";
 import { ratios, tireRadius } from "./gearing.js";
@@ -32,10 +32,10 @@ export function gearboxFor(d, cfg) {
 }
 
 /**
- * buildConfig(design, profile, basePcText) → { pc, info, gearbox, notes }.
+ * buildConfig(design, profile, basePcText, built?) → { pc, info, gearbox, notes }.
  * pc and info are the file texts; notes are warnings to show with the export.
  */
-export function buildConfig(d, profile, baseText) {
+export function buildConfig(d, profile, baseText, built = null) {
   const cfg = profile.config;
   const base = parseJBeam(baseText);
   const parts = { ...(base.parts || {}) };
@@ -51,6 +51,9 @@ export function buildConfig(d, profile, baseText) {
   for (const fd of drives) parts[fd.slot] = fd.part;
   if (profile.flywheelSlot) parts[profile.flywheelSlot] = flywheelPartName(d, profile);
   const fam = familyFor(profile, d.layout);
+  // the exhaust part, when the export wrote one (built: buildEngine's result)
+  const exhaust = built ? built.exhaust : exhaustPartName(d, profile);
+  if (exhaust) parts[fam.exhaust.slot] = exhaust;
   if (d.induction && d.induction !== "none" && fam.intake) {
     parts[fam.intake.slot] = inductionPartName(d, profile);
     if (hasTurbo(d)) vars.$wastegateStart = turboSpec(d).wastegateStart;
